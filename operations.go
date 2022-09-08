@@ -123,10 +123,10 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_JUMP_IF_TRUE:  {name: "OP_JUMP_IF_TRUE", dataSize: 4, parser: ParseJump},
 
 	OP_FUNCTION_END:           {name: "OP_FUNCTION_END", dataSize: 0},
-	OP_FUNCTION_CALL_LOCAL:    {name: "OP_FUNCTION_CALL_LOCAL", dataSize: 12},
+	OP_FUNCTION_CALL_LOCAL:    {name: "OP_FUNCTION_CALL_LOCAL", dataSize: 12, parser: ParseFunctionCallLocal},
 	OP_FUNCTION_CALL_IMPORTED: {name: "OP_FUNCTION_CALL_IMPORTED", dataSize: 12, parser: ParseFunctionCallImported},
 
-	OP_TASK_CALL_LOCAL:    {name: "OP_TASK_CALL_LOCAL", dataSize: 12},
+	OP_TASK_CALL_LOCAL:    {name: "OP_TASK_CALL_LOCAL", dataSize: 12, parser: ParseFunctionCallLocal},
 	OP_TASK_CALL_IMPORTED: {name: "OP_TASK_CALL_IMPORTED", dataSize: 12, parser: ParseFunctionCallImported},
 
 	OP_INT_ADD: {name: "OP_INT_ADD", dataSize: 0},
@@ -297,18 +297,47 @@ func ParseJump(data []byte, codeOffset uint32) OperationData {
 	}
 }
 
+type FunctionCallLocalData struct {
+	//value1         uint32
+	offset         uint32
+	parameterCount uint32
+}
+
+func (d FunctionCallLocalData) String() string {
+	name, ok := FUNC_EXPORT_MAP[d.offset]
+	if ok {
+		return fmt.Sprintf("%s 0x%08X %d", name, d.offset, d.parameterCount)
+	} else {
+		return fmt.Sprintf("local_function_%08X %d", d.offset, d.parameterCount)
+	}
+}
+
+func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
+	return FunctionCallLocalData{
+		//value1:         binary.LittleEndian.Uint32(data[0:4]),
+		offset:         binary.LittleEndian.Uint32(data[4:8]),
+		parameterCount: binary.LittleEndian.Uint32(data[8:12]),
+	}
+}
+
 type FunctionCallImportedData struct {
 	name string
+	//value1         uint32
+	//value2         uint32
+	parameterCount uint32
 }
 
 func (d FunctionCallImportedData) String() string {
-	return fmt.Sprintf(d.name)
+	return fmt.Sprintf("%s %d", d.name, d.parameterCount)
 }
 
 func ParseFunctionCallImported(data []byte, codeOffset uint32) OperationData {
 	name := FUNC_IMPORT_MAP[codeOffset]
 	return FunctionCallImportedData{
 		name: name,
+		//value1:         binary.LittleEndian.Uint32(data[0:4]),
+		//value2:         binary.LittleEndian.Uint32(data[4:8]),
+		parameterCount: binary.LittleEndian.Uint32(data[8:12]),
 	}
 }
 
@@ -328,18 +357,19 @@ func ParseLiteralString(data []byte, codeOffset uint32) OperationData {
 }
 
 type ScheduleEveryData struct {
-	offset   uint32
-	interval float32
+	skipOffset uint32
+	middle     uint32
+	interval   float32
 }
 
 func (d ScheduleEveryData) String() string {
-	return fmt.Sprintf("0x%08X %f", d.offset, d.interval)
+	return fmt.Sprintf("0x%08X %d, %f", d.skipOffset, d.middle, d.interval)
 }
 
 func ParseScheduleEvery(data []byte, codeOffset uint32) OperationData {
 	return ScheduleEveryData{
-		offset: binary.LittleEndian.Uint32(data[0:4]),
-		// TODO: Figure out the middle value...
-		interval: math.Float32frombits(binary.LittleEndian.Uint32(data[8:12])),
+		skipOffset: binary.LittleEndian.Uint32(data[0:4]),
+		middle:     binary.LittleEndian.Uint32(data[4:8]),
+		interval:   math.Float32frombits(binary.LittleEndian.Uint32(data[8:12])),
 	}
 }
