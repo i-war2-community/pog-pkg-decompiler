@@ -85,7 +85,7 @@ const (
 	OP_STRING_INIT byte = 0x3A
 
 	OP_UNKNOWN_3B            byte = 0x3B
-	OP_UNKNOWN_3C            byte = 0x3C // Maybe this is some operation to store the top of the stack as a return value? Even void functions return 0 under the hood.
+	OP_UNKNOWN_3C            byte = 0x3C
 	OP_STRING_VARIABLE_WRITE byte = 0x3D
 
 	OP_LITERAL_STRING byte = 0x3E
