@@ -167,10 +167,10 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_CAST_FLT_TO_INT:    {name: "OP_CAST_FLT_TO_INT", dataSize: 0, parser: ParseUnaryOperator},
 	OP_CAST_HANDLE_TO_INT: {name: "OP_CAST_HANDLE_TO_INT", dataSize: 0, parser: ParseUnaryOperator},
 
-	OP_STRING_INIT: {name: "OP_STRING_INIT", dataSize: 4, omit: true},
+	OP_STRING_INIT: {name: "OP_STRING_INIT", dataSize: 4, omit: false, parser: ParseStringInit},
 
-	OP_UNKNOWN_3B:            {name: "OP_UNKNOWN_3B", dataSize: 0, omit: true},
-	OP_UNKNOWN_3C:            {name: "OP_UNKNOWN_3C", dataSize: 0, omit: true},
+	OP_UNKNOWN_3B:            {name: "OP_UNKNOWN_3B", dataSize: 0, omit: false, parser: ParseUnaryOperator},
+	OP_UNKNOWN_3C:            {name: "OP_UNKNOWN_3C", dataSize: 0, omit: false, parser: ParseUnaryOperator},
 	OP_STRING_VARIABLE_WRITE: {name: "OP_STRING_VARIABLE_WRITE", dataSize: 4, parser: ParseVariableWrite},
 
 	OP_LITERAL_STRING: {name: "OP_LITERAL_STRING", dataSize: 4, parser: ParseLiteralString},
@@ -548,6 +548,28 @@ func ParseFunctionCallImported(data []byte, codeOffset uint32) OperationData {
 
 	return FunctionCallImportedData{
 		declaration: declaration,
+	}
+}
+
+type StringInitData struct {
+	value uint32
+}
+
+func (d StringInitData) String() string {
+	return fmt.Sprintf("%d", d.value)
+}
+
+func (d StringInitData) PushCount() int {
+	return 1
+}
+
+func (d StringInitData) PopCount() int {
+	return 0
+}
+
+func ParseStringInit(data []byte, codeOffset uint32) OperationData {
+	return StringInitData{
+		value: binary.LittleEndian.Uint32(data),
 	}
 }
 

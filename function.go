@@ -1,20 +1,14 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
 type FunctionParameter struct {
 	typeName      string
 	parameterName string
-}
-
-type Variable struct {
-	typeName     string
-	variableName string
-	stackIndex   uint32
 }
 
 type FunctionDeclaration struct {
@@ -58,7 +52,7 @@ func writeLocalVariableDeclarations(variables []Variable, writer CodeWriter) {
 }
 
 type OpGraph struct {
-	code      string
+	code      *string
 	operation *Operation
 	children  []*OpGraph
 }
@@ -83,8 +77,8 @@ func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
 	}
 
 	// Write ourselves
-	if len(node.code) > 0 {
-		writer.Append(node.code)
+	if node.code != nil {
+		writer.Append(*node.code)
 	} else {
 		opInfo := OP_MAP[node.operation.opcode]
 		writer.Appendf("%s", opInfo.name)
@@ -117,16 +111,6 @@ func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
 	}
 }
 
-func getVariableByStackIndex(variables []Variable, stackIndex uint32) *Variable {
-	for ii := 0; ii < len(variables); ii++ {
-		lv := &variables[ii]
-		if lv.stackIndex == stackIndex {
-			return lv
-		}
-	}
-	return nil
-}
-
 func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 	var sb strings.Builder
 
@@ -151,95 +135,17 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 	return sb.String()
 }
 
-func renderOperationCode(operation *Operation, variables []Variable) string {
-	switch operation.opcode {
-	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
-		writeData := operation.data.(VariableWriteData)
-		v := getVariableByStackIndex(variables, writeData.index)
-		return fmt.Sprintf("%s = ", v.variableName)
-
-	case OP_VARIABLE_READ:
-		readData := operation.data.(VariableReadData)
-		v := getVariableByStackIndex(variables, readData.index)
-		return fmt.Sprint(v.variableName)
-
-	case OP_LITERAL_TRUE:
-		return "1"
-
-	case OP_LITERAL_FALSE:
-		return "0"
-
-	case OP_LITERAL_BYTE:
-		data := operation.data.(LiteralByteData)
-		return fmt.Sprintf("%d", data.value)
-
-	case OP_LITERAL_SHORT:
-		data := operation.data.(LiteralShortData)
-		return fmt.Sprintf("%d", data.value)
-
-	case OP_LITERAL_INT:
-		data := operation.data.(LiteralIntData)
-		return fmt.Sprintf("%d", data.value)
-
-	case OP_LITERAL_FLT:
-		data := operation.data.(LiteralFloatData)
-		return fmt.Sprintf("%f", data.value)
-
-	case OP_LITERAL_STRING:
-		data := operation.data.(LiteralStringData)
-		// TODO: This seems like an area that could cause a lot of trouble
-		s, _ := json.Marshal(STRING_TABLE[data.index])
-		return string(s)
-
-	case OP_FUNCTION_CALL_LOCAL:
-		data := operation.data.(FunctionCallLocalData)
-		return data.declaration.name
-
-	case OP_INT_EQUALS, OP_STRING_EQUALS:
-		return "=="
-
-	case OP_INT_NOT_EQUALS:
-		return "!="
-
-	case OP_INT_GT, OP_FLT_GT:
-		return ">"
-
-	case OP_INT_LT, OP_FLT_LT:
-		return "<"
-
-	case OP_INT_GT_EQUALS, OP_FLT_GT_EQUALS:
-		return ">="
-
-	case OP_INT_LT_EQUALS, OP_FLT_LT_EQUALS:
-		return "<="
-
-	case OP_INT_ADD, OP_FLT_ADD:
-		return "+"
-
-	case OP_INT_SUB, OP_FLT_SUB:
-		return "-"
-
-	case OP_INT_MUL, OP_FLT_MUL:
-		return "*"
-
-	case OP_INT_DIV, OP_FLT_DIV:
-		return "/"
-
-	case OP_INT_MOD:
-		return "%"
-
-	case OP_LOGICAL_AND:
-		return "&&"
-
-	case OP_LOGICAL_OR:
-		return "||"
-
-	case OP_LOGICAL_NOT:
-		return "!"
-
+func shouldRenderStatement(s *OpGraph) bool {
+	// Don't render weird string statements that show up at the end of functions
+	if s.operation.opcode == OP_POP_STACK && s.children[0].operation.opcode == OP_UNKNOWN_3B && s.children[0].children[0].operation.opcode == OP_VARIABLE_READ {
+		return false
 	}
 
-	return ""
+	// Don't render string init statements
+	if s.operation.opcode == OP_POP_STACK && s.children[0].operation.opcode == OP_VARIABLE_WRITE && s.children[0].children[0].operation.opcode == OP_STRING_INIT {
+		return false
+	}
+	return true
 }
 
 func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) int {
@@ -305,12 +211,12 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		// Create a node for this operation
 		node := new(OpGraph)
 		node.operation = operation
-		node.code = renderOperationCode(operation, variables)
+		node.code = RenderOperationCode(operation, variables)
 
 		if operation.data.PopCount() > 0 {
 			if operation.data.PopCount() > len(stack) {
-				fmt.Printf("Warn: Stack underflow!")
-				//os.Exit(2)
+				fmt.Printf("ERROR: Stack underflow!")
+				os.Exit(2)
 				continue
 			}
 			for ii := 0; ii < operation.data.PopCount(); ii++ {
@@ -325,8 +231,10 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		}
 
 		if operation.opcode == OP_POP_STACK {
-			printGraphNode(node.children[0], writer, true)
-			writer.Append(";\n")
+			if shouldRenderStatement(node) {
+				printGraphNode(node, writer, true)
+				writer.Append(";\n")
+			}
 		}
 	}
 	return len(OPERATIONS)
