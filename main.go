@@ -6,12 +6,16 @@ import (
 	"os"
 )
 
-var FUNC_EXPORT_MAP map[uint32]string = map[uint32]string{}
-var FUNC_IMPORT_MAP map[uint32]string = map[uint32]string{}
-
+var EXPORTING_PACKAGE string
 var IMPORTING_PACKAGE string
 
+var FUNC_EXPORTS []*FunctionDeclaration = []*FunctionDeclaration{}
+
+var FUNC_DEFINITION_MAP map[uint32]*FunctionDeclaration = map[uint32]*FunctionDeclaration{}
+var FUNC_IMPORT_MAP map[uint32]*FunctionDeclaration = map[uint32]*FunctionDeclaration{}
+
 var STRING_TABLE = []string{}
+var OPERATIONS = []Operation{}
 
 type SectionHeader struct {
 	identifier string
@@ -131,11 +135,12 @@ func readSection(file *os.File, section *SectionHeader) error {
 		readFunctionImportSection(file, name)
 
 	case "PKHD":
-		// name, err := readString(file)
-		// if err != nil {
-		// 	return err
-		// }
-		// fmt.Printf("%s", name)
+		name, err := readString(file)
+		if err != nil {
+			return err
+		}
+		//fmt.Printf("%s", name)
+		EXPORTING_PACKAGE = name
 
 	case "FEXP":
 		name, err := readString(file)
@@ -147,7 +152,14 @@ func readSection(file *os.File, section *SectionHeader) error {
 			return err
 		}
 
-		FUNC_EXPORT_MAP[funcOffset] = name
+		// Create a new declaration for this function
+		declaration := AddFunctionDeclaration(EXPORTING_PACKAGE, name)
+
+		// Add it to the list of exports
+		FUNC_EXPORTS = append(FUNC_EXPORTS, declaration)
+
+		// Add it to the definition map
+		FUNC_DEFINITION_MAP[funcOffset] = declaration
 
 	case "STAB":
 		// Read in the string table
@@ -184,14 +196,18 @@ func readFunctionImportSection(file *os.File, funcName string) error {
 			return err
 		}
 		//fmt.Printf(" 0x%08X", offset)
-		FUNC_IMPORT_MAP[offset] = fmt.Sprintf("%s.%s", IMPORTING_PACKAGE, funcName)
+
+		declaration := AddFunctionDeclaration(IMPORTING_PACKAGE, funcName)
+		FUNC_IMPORT_MAP[offset] = declaration
 	}
 
 	return nil
 }
 
 func readCodeSection(file *os.File) error {
-	fmt.Printf("\n")
+
+	// TODO: Move this somewhere else
+	writer := NewCodeWriter()
 
 	buffer := make([]byte, 4)
 	n, err := file.Read(buffer)
@@ -215,10 +231,6 @@ func readCodeSection(file *os.File) error {
 
 	for offset = 0; offset < codeLength; {
 
-		if funcName, ok := FUNC_EXPORT_MAP[offset]; ok {
-			fmt.Printf("=============== START_FUNCTION %s\n", funcName)
-		}
-
 		opcode := buffer[offset]
 
 		opInfo, ok := OP_MAP[opcode]
@@ -226,26 +238,33 @@ func readCodeSection(file *os.File) error {
 			return fmt.Errorf("Error: Unknown opcode 0x%02X at position 0x%08X\n", opcode, offset+uint32(initialOffset))
 		}
 
-		if !opInfo.omit {
-			fmt.Printf("0x%08X 0x%08X %s ", offset+uint32(initialOffset), offset, opInfo.name)
-		}
+		operation := new(Operation)
+		operation.opcode = opcode
+		operation.offset = offset
 
 		offset++
 
 		if opInfo.parser != nil {
 			data := buffer[offset : offset+uint32(opInfo.dataSize)]
-			opData := opInfo.parser(data, offset-1)
-			if !opInfo.omit {
-				fmt.Printf("%s", opData.String())
-			}
-		}
-
-		if !opInfo.omit {
-			fmt.Printf("\n")
+			operation.data = opInfo.parser(data, offset-1)
 		}
 
 		offset += uint32(opInfo.dataSize)
+
+		OPERATIONS = append(OPERATIONS, *operation)
 	}
+
+	// TEMPORARY OUTPUT
+	for idx := 0; idx < len(OPERATIONS); idx++ {
+		operation := OPERATIONS[idx]
+		declaration := FUNC_DEFINITION_MAP[operation.offset]
+
+		if declaration != nil {
+			idx = DecompileFunction(declaration, idx, initialOffset, writer)
+		}
+	}
+
+	fmt.Print(writer.String())
 
 	return nil
 }
