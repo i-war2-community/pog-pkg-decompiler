@@ -1,8 +1,8 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -185,6 +185,12 @@ func renderOperationCode(operation *Operation, variables []Variable) string {
 		data := operation.data.(LiteralFloatData)
 		return fmt.Sprintf("%f", data.value)
 
+	case OP_LITERAL_STRING:
+		data := operation.data.(LiteralStringData)
+		// TODO: This seems like an area that could cause a lot of trouble
+		s, _ := json.Marshal(STRING_TABLE[data.index])
+		return string(s)
+
 	case OP_FUNCTION_CALL_LOCAL:
 		data := operation.data.(FunctionCallLocalData)
 		return data.declaration.name
@@ -303,8 +309,9 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 
 		if operation.data.PopCount() > 0 {
 			if operation.data.PopCount() > len(stack) {
-				fmt.Printf("Error: Stack underflow!")
-				os.Exit(2)
+				fmt.Printf("Warn: Stack underflow!")
+				//os.Exit(2)
+				continue
 			}
 			for ii := 0; ii < operation.data.PopCount(); ii++ {
 				last := len(stack) - 1
