@@ -6,9 +6,16 @@ type Variable struct {
 	stackIndex   uint32
 }
 
-func GetVariableByStackIndex(variables []Variable, stackIndex uint32) *Variable {
-	for ii := 0; ii < len(variables); ii++ {
-		lv := &variables[ii]
+type Scope struct {
+	function                 *FunctionDeclaration
+	functionEndOffset        uint32
+	variables                []Variable
+	localVariableIndexOffset uint32
+}
+
+func (s Scope) GetVariableByStackIndex(stackIndex uint32) *Variable {
+	for ii := 0; ii < len(s.variables); ii++ {
+		lv := &s.variables[ii]
 		if lv.stackIndex == stackIndex {
 			return lv
 		}

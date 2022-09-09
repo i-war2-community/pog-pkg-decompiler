@@ -19,17 +19,26 @@ func (op *Operation) WriteAssembly(writer CodeWriter) {
 	}
 }
 
-func RenderOperationCode(operation *Operation, variables []Variable) *string {
+func IsFunctionCall(operation *Operation) bool {
+	switch operation.opcode {
+	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_IMPORTED, OP_TASK_CALL_LOCAL:
+		return true
+	}
+
+	return false
+}
+
+func RenderOperationCode(operation *Operation, scope Scope) *string {
 	var result string
 	switch operation.opcode {
 	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		writeData := operation.data.(VariableWriteData)
-		v := GetVariableByStackIndex(variables, writeData.index)
+		v := scope.GetVariableByStackIndex(writeData.index)
 		result = fmt.Sprintf("%s = ", v.variableName)
 
 	case OP_VARIABLE_READ:
 		readData := operation.data.(VariableReadData)
-		v := GetVariableByStackIndex(variables, readData.index)
+		v := scope.GetVariableByStackIndex(readData.index)
 		result = fmt.Sprint(v.variableName)
 
 	case OP_LITERAL_TRUE:
@@ -63,6 +72,18 @@ func RenderOperationCode(operation *Operation, variables []Variable) *string {
 	case OP_FUNCTION_CALL_LOCAL:
 		data := operation.data.(FunctionCallLocalData)
 		result = data.declaration.name
+
+	case OP_FUNCTION_CALL_IMPORTED:
+		data := operation.data.(FunctionCallImportedData)
+		result = data.declaration.GetScopedName()
+
+	case OP_TASK_CALL_LOCAL:
+		data := operation.data.(FunctionCallLocalData)
+		result = fmt.Sprintf("start %s", data.declaration.name)
+
+	case OP_TASK_CALL_IMPORTED:
+		data := operation.data.(FunctionCallImportedData)
+		result = fmt.Sprintf("start %s", data.declaration.GetScopedName())
 
 	case OP_INT_EQUALS, OP_STRING_EQUALS:
 		result = "=="
@@ -113,6 +134,12 @@ func RenderOperationCode(operation *Operation, variables []Variable) *string {
 		result = ""
 
 	case OP_POP_STACK:
+		result = ""
+
+	case OP_CAST_INT_TO_FLT, OP_CAST_HANDLE_TO_INT, OP_CAST_FLT_TO_INT:
+		result = ""
+
+	case OP_JUMP_IF_FALSE:
 		result = ""
 
 	default:

@@ -2,14 +2,20 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"os"
 )
+
+// Command line options
+var INCLUDES_DIR string
+var OUTPUT_ASSEMBLY bool
 
 var EXPORTING_PACKAGE string
 var IMPORTING_PACKAGE string
 
 var FUNC_EXPORTS []*FunctionDeclaration = []*FunctionDeclaration{}
+var PACKAGE_IMPORTS []string = []string{}
 
 var FUNC_DEFINITION_MAP map[uint32]*FunctionDeclaration = map[uint32]*FunctionDeclaration{}
 var FUNC_IMPORT_MAP map[uint32]*FunctionDeclaration = map[uint32]*FunctionDeclaration{}
@@ -20,6 +26,36 @@ var OPERATIONS = []Operation{}
 type SectionHeader struct {
 	identifier string
 	length     uint32
+}
+
+func renderPackageImports(writer CodeWriter) {
+	importCount := len(PACKAGE_IMPORTS)
+	if importCount == 0 {
+		return
+	}
+	writer.Append("uses ")
+	for ii := 0; ii < importCount; ii++ {
+		writer.Append(PACKAGE_IMPORTS[ii])
+		if ii < importCount-1 {
+			writer.Append(", ")
+		}
+	}
+	writer.Append(";\n\n")
+}
+
+func renderFunctionExports(writer CodeWriter) {
+	exportCount := len(FUNC_EXPORTS)
+	if exportCount == 0 {
+		return
+	}
+	writer.Append("provides ")
+	for ii := 0; ii < exportCount; ii++ {
+		writer.Append(FUNC_EXPORTS[ii].name)
+		if ii < exportCount-1 {
+			writer.Append(", ")
+		}
+	}
+	writer.Append(";\n\n")
 }
 
 func readString(file *os.File) (string, error) {
@@ -79,7 +115,7 @@ func readSectionHeader(file *os.File) (*SectionHeader, error) {
 	return result, nil
 }
 
-func readSections(file *os.File, maximumLength uint32) error {
+func readSections(file *os.File, maximumLength uint32, writer CodeWriter) error {
 
 	var length uint32 = 0
 
@@ -98,7 +134,7 @@ func readSections(file *os.File, maximumLength uint32) error {
 			return err
 		}
 
-		err = readSection(file, section)
+		err = readSection(file, section, writer)
 		if err != nil {
 			fmt.Printf("Error: Failed to read section: %v", err)
 			return err
@@ -115,7 +151,7 @@ func readSections(file *os.File, maximumLength uint32) error {
 	return nil
 }
 
-func readSection(file *os.File, section *SectionHeader) error {
+func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error {
 	var err error = nil
 
 	switch section.identifier {
@@ -125,6 +161,16 @@ func readSection(file *os.File, section *SectionHeader) error {
 			return err
 		}
 		//fmt.Printf("%s", name)
+		if name != "__system" {
+			_, ok := PACKAGES[name]
+			if !ok {
+				fmt.Printf("ERROR: Importing package '%s' not found in includes!", name)
+				os.Exit(1)
+			}
+			name = PACKAGES[name]
+
+			PACKAGE_IMPORTS = append(PACKAGE_IMPORTS, name)
+		}
 		IMPORTING_PACKAGE = name
 	case "FIMP":
 		name, err := readString(file)
@@ -140,7 +186,12 @@ func readSection(file *os.File, section *SectionHeader) error {
 			return err
 		}
 		//fmt.Printf("%s", name)
-		EXPORTING_PACKAGE = name
+		lookup, ok := PACKAGES[name]
+		if !ok {
+			fmt.Printf("ERROR: Exporting package '%s' not found in includes!", name)
+			os.Exit(1)
+		}
+		EXPORTING_PACKAGE = lookup
 
 	case "FEXP":
 		name, err := readString(file)
@@ -177,7 +228,11 @@ func readSection(file *os.File, section *SectionHeader) error {
 		}
 
 	case "CODE":
-		err = readCodeSection(file)
+		writer.Appendf("package %s;\n\n", EXPORTING_PACKAGE)
+		renderPackageImports(writer)
+		renderFunctionExports(writer)
+
+		err = readCodeSection(file, writer)
 	}
 
 	return err
@@ -204,10 +259,7 @@ func readFunctionImportSection(file *os.File, funcName string) error {
 	return nil
 }
 
-func readCodeSection(file *os.File) error {
-
-	// TODO: Move this somewhere else
-	writer := NewCodeWriter()
+func readCodeSection(file *os.File, writer CodeWriter) error {
 
 	buffer := make([]byte, 4)
 	n, err := file.Read(buffer)
@@ -270,12 +322,12 @@ func readCodeSection(file *os.File) error {
 }
 
 func main() {
-	//filename := "iacttwo.pkg"
-	//filename := "..\\iwar-script\\packages\\iact2mission25.pkg"
-	//filename := "..\\iwar-script\\packages\\test.pkg"
+	flag.StringVar(&INCLUDES_DIR, "includes", "", "The includes directory with package headers.")
+	flag.BoolVar(&OUTPUT_ASSEMBLY, "assembly", false, "Have the decompiler output the 'assembly' for each function as comments above the function.")
+	flag.Parse()
 
 	// TODO: Proper arguments later when we need some
-	args := os.Args[1:]
+	args := flag.Args()
 	if len(args) != 1 {
 		fmt.Println("Invalid arguments")
 		return
@@ -288,6 +340,10 @@ func main() {
 	if err != nil {
 		fmt.Printf("Error: Failed to read file: %v", err)
 		return
+	}
+
+	if len(INCLUDES_DIR) > 0 {
+		LoadFunctionDeclarationsFromHeaders(INCLUDES_DIR)
 	}
 
 	form, err := readSectionHeader(f)
@@ -306,7 +362,10 @@ func main() {
 	f.Seek(4, 1)
 	form.length -= 4
 
-	err = readSections(f, form.length)
+	// TODO: Move this somewhere else
+	writer := NewCodeWriter()
+
+	err = readSections(f, form.length, writer)
 
 	if err != nil {
 		fmt.Printf("Error: Failed to read file: %v", err)

@@ -36,7 +36,7 @@ func (cw *codeWriter) PopIndent() {
 
 func (cw *codeWriter) internalAppend(s string) {
 	cw.sb.WriteString(s)
-	//fmt.Print(s)
+	fmt.Print(s)
 	cw.last = s
 }
 

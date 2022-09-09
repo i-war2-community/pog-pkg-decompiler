@@ -18,6 +18,8 @@ type FunctionDeclaration struct {
 	parameters     *[]FunctionParameter
 }
 
+const PROTOTYPE_PREFIX = "prototype"
+
 var FUNC_DECLARATIONS map[string]*FunctionDeclaration = map[string]*FunctionDeclaration{}
 
 func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
@@ -36,6 +38,87 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 	return result
 }
 
+func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration {
+	result := new(FunctionDeclaration)
+
+	if !strings.HasPrefix(prototype, PROTOTYPE_PREFIX) {
+		fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
+		return nil
+	}
+
+	// Skip the word prototype at the start
+	function := strings.TrimSpace(prototype[len(PROTOTYPE_PREFIX):])
+
+	// Find the parameter list
+	parts := strings.Split(function, "(")
+
+	if len(parts) != 2 {
+		fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
+		return nil
+	}
+
+	function = parts[0]
+	parameterList := parts[1]
+
+	if !strings.HasSuffix(parameterList, ")") {
+		fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
+		return nil
+	}
+	parameterList = strings.TrimSpace(parameterList[:len(parameterList)-1])
+
+	parts = strings.Fields(function)
+
+	switch len(parts) {
+	case 1:
+		result.returnTypeName = ""
+	case 2:
+		result.returnTypeName = parts[0]
+		function = parts[1]
+	default:
+		fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
+		return nil
+	}
+
+	parts = strings.Split(function, ".")
+
+	if len(parts) != 2 {
+		//fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
+		return nil
+	}
+
+	// Carve out the package and function name
+	result.pkg = parts[0]
+	result.name = parts[1]
+
+	// Parse the parameters
+	if len(parameterList) > 0 {
+		params := strings.Split(parameterList, ",")
+
+		parameters := []FunctionParameter{}
+
+		for ii := 0; ii < len(params); ii++ {
+			parts = strings.Fields(params[ii])
+			if parts[0] == "ref" {
+				parts = parts[1:]
+			}
+			if len(parts) != 2 {
+				fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
+				return nil
+			}
+			p := FunctionParameter{
+				typeName:      parts[0],
+				parameterName: parts[1],
+			}
+			parameters = append(parameters, p)
+		}
+
+		result.parameters = &parameters
+	}
+
+	FUNC_DECLARATIONS[result.GetScopedName()] = result
+	return result
+}
+
 func (f *FunctionDeclaration) GetScopedName() string {
 	if len(f.pkg) > 0 {
 		return fmt.Sprintf("%s.%s", f.pkg, f.name)
@@ -49,12 +132,10 @@ func writeLocalVariableDeclarations(variables []Variable, writer CodeWriter) {
 		lv := &variables[ii]
 		writer.Appendf("%s %s;\n", lv.typeName, lv.variableName)
 	}
-}
 
-type OpGraph struct {
-	code      *string
-	operation *Operation
-	children  []*OpGraph
+	if len(variables) > 0 {
+		writer.Append("\n")
+	}
 }
 
 func (og *OpGraph) String() string {
@@ -63,51 +144,6 @@ func (og *OpGraph) String() string {
 		return fmt.Sprintf(" %s[%s] ", opInfo.name, og.operation.data.String())
 	} else {
 		return fmt.Sprintf(" %s ", opInfo.name)
-	}
-}
-
-func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
-
-	if len(node.children) == 2 {
-		if !onlyChild {
-			writer.Append("(")
-		}
-		printGraphNode(node.children[0], writer, false)
-		writer.Append(" ")
-	}
-
-	// Write ourselves
-	if node.code != nil {
-		writer.Append(*node.code)
-	} else {
-		opInfo := OP_MAP[node.operation.opcode]
-		writer.Appendf("%s", opInfo.name)
-		if node.operation.data != nil && len(node.operation.data.String()) > 0 {
-			writer.Appendf("[%s]", node.operation.data.String())
-		}
-	}
-
-	if len(node.children) == 1 {
-		printGraphNode(node.children[0], writer, true)
-	}
-
-	if len(node.children) == 2 {
-		writer.Append(" ")
-		printGraphNode(node.children[1], writer, false)
-		if !onlyChild {
-			writer.Append(")")
-		}
-	}
-
-	if len(node.children) > 2 {
-		writer.Append("(")
-		for ii := len(node.children) - 1; ii >= 0; ii-- {
-			printGraphNode(node.children[ii], writer, true)
-			if ii > 0 {
-				writer.Append(", ")
-			}
-		}
-		writer.Append(")")
 	}
 }
 
@@ -149,15 +185,18 @@ func shouldRenderStatement(s *OpGraph) bool {
 }
 
 func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) int {
-	PrintFunctionAssembly(declaration, startingIndex, initialOffset, writer)
+	if OUTPUT_ASSEMBLY {
+		PrintFunctionAssembly(declaration, startingIndex, initialOffset, writer)
+	}
+	scope := Scope{
+		function:  declaration,
+		variables: []Variable{},
+	}
+	//writer.Appendf(renderFunctionDefinitionHeader(declaration))
+	//writer.Appendf("\n{\n")
+	//writer.PushIndent()
 
-	variables := []Variable{}
-	writer.Appendf(renderFunctionDefinitionHeader(declaration))
-	writer.Appendf("\n{\n")
-	writer.PushIndent()
-
-	var localVariableIndexOffset uint32 = 0
-
+	// Add the parameters from our function declaration to the scope variables
 	if declaration.parameters != nil {
 		for ii := 0; ii < len(*declaration.parameters); ii++ {
 			param := &(*declaration.parameters)[ii]
@@ -166,10 +205,10 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 				variableName: param.parameterName,
 				stackIndex:   uint32(ii),
 			}
-			variables = append(variables, v)
+			scope.variables = append(scope.variables, v)
 		}
 
-		localVariableIndexOffset = uint32(len(*declaration.parameters))
+		scope.localVariableIndexOffset = uint32(len(*declaration.parameters))
 	}
 
 	// Check to see if there are local variables
@@ -181,63 +220,71 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 			lv := Variable{
 				typeName:     "UNKNOWN",
 				variableName: fmt.Sprintf("local_%d", ii),
-				stackIndex:   uint32(ii + localVariableIndexOffset),
+				stackIndex:   uint32(ii + scope.localVariableIndexOffset),
 			}
-			variables = append(variables, lv)
+			scope.variables = append(scope.variables, lv)
 		}
 		// Skip over the local variable opcode
 		startingIndex++
 	}
 
-	writeLocalVariableDeclarations(variables[localVariableIndexOffset:], writer)
+	// TODO: This needs to happen later, once we know our variable types etc
+	//writeLocalVariableDeclarations(scope.variables[localVariableIndexOffset:], writer)
 
-	stack := []*OpGraph{}
+	// Find the end of the function
+	var functionEnd *Operation = nil
+	endIdx := 0
 
 	for idx := startingIndex; idx < len(OPERATIONS); idx++ {
-		operation := &OPERATIONS[idx]
+		if OPERATIONS[idx].opcode == OP_FUNCTION_END {
+			idx--
+			functionEnd = &OPERATIONS[idx]
+			endIdx = idx
 
-		if operation.opcode == OP_FUNCTION_END {
-			writer.PopIndent()
-			writer.Append("}\n")
-			return idx
-		}
+			// Check to see if we have a bunch of those weird string operations for string local variables at the end of the function
+			for idx >= startingIndex+4 {
+				op1 := &OPERATIONS[idx-3]
+				op2 := &OPERATIONS[idx-2]
+				op3 := &OPERATIONS[idx-1]
 
-		opInfo := OP_MAP[operation.opcode]
-
-		if opInfo.omit || operation.data == nil {
-			continue
-		}
-
-		// Create a node for this operation
-		node := new(OpGraph)
-		node.operation = operation
-		node.code = RenderOperationCode(operation, variables)
-
-		if operation.data.PopCount() > 0 {
-			if operation.data.PopCount() > len(stack) {
-				fmt.Printf("ERROR: Stack underflow!")
-				os.Exit(2)
-				continue
+				if op1.opcode != OP_VARIABLE_READ || op2.opcode != OP_UNKNOWN_3B || op3.opcode != OP_POP_STACK {
+					break
+				}
+				idx -= 3
+				functionEnd = &OPERATIONS[idx]
+				endIdx = idx
 			}
-			for ii := 0; ii < operation.data.PopCount(); ii++ {
-				last := len(stack) - 1
-				child := stack[last]
-				stack = stack[:last]
-				node.children = append(node.children, child)
-			}
-		}
-		if operation.data.PushCount() == 1 {
-			stack = append(stack, node)
-		}
-
-		if operation.opcode == OP_POP_STACK {
-			if shouldRenderStatement(node) {
-				printGraphNode(node, writer, true)
-				writer.Append(";\n")
-			}
+			break
 		}
 	}
-	return len(OPERATIONS)
+
+	// Idiot check
+	if functionEnd == nil {
+		fmt.Printf("ERROR: Failed to find end of function: %s", declaration.name)
+		os.Exit(1)
+	}
+
+	// Save off the end offset so we can detect return statements
+	scope.functionEndOffset = functionEnd.offset
+
+	blockOps := OPERATIONS[startingIndex:endIdx]
+	body := ParseOperations(scope, blockOps)
+
+	// TODO: Resolve variable types, etc
+
+	// Write the function header
+	writer.Appendf(renderFunctionDefinitionHeader(declaration))
+	writer.Appendf("\n{\n")
+	writer.PushIndent()
+
+	writeLocalVariableDeclarations(scope.variables[scope.localVariableIndexOffset:], writer)
+
+	RenderBlockElements(body, writer)
+
+	writer.PopIndent()
+	writer.Appendf("}\n")
+
+	return endIdx
 }
 
 func PrintFunctionAssembly(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) {

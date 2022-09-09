@@ -128,7 +128,7 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_FUNCTION_CALL_LOCAL:    {name: "OP_FUNCTION_CALL_LOCAL", dataSize: 12, parser: ParseFunctionCallLocal},
 	OP_FUNCTION_CALL_IMPORTED: {name: "OP_FUNCTION_CALL_IMPORTED", dataSize: 12, parser: ParseFunctionCallImported},
 
-	OP_TASK_CALL_LOCAL:    {name: "OP_TASK_CALL_LOCAL", dataSize: 12, parser: ParseFunctionCallLocal},
+	OP_TASK_CALL_LOCAL:    {name: "OP_TASK_CALL_LOCAL", dataSize: 12, parser: ParseTaskCallLocal},
 	OP_TASK_CALL_IMPORTED: {name: "OP_TASK_CALL_IMPORTED", dataSize: 12, parser: ParseFunctionCallImported},
 
 	OP_INT_ADD: {name: "OP_INT_ADD", dataSize: 0, parser: ParseOperator},
@@ -507,6 +507,29 @@ func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
 	FUNC_DEFINITION_MAP[offset] = declaration
 
 	if declaration.parameters == nil {
+		params := make([]FunctionParameter, parameterCount)
+		for ii := 0; ii < len(params); ii++ {
+			p := &params[ii]
+			p.typeName = "UNKNOWN"
+			p.parameterName = fmt.Sprintf("param_%d", ii)
+		}
+		declaration.parameters = &params
+	}
+
+	return FunctionCallLocalData{
+		declaration: declaration,
+	}
+}
+
+func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
+	offset := binary.LittleEndian.Uint32(data[4:8])
+	parameterCount := binary.LittleEndian.Uint32(data[8:12])
+
+	declaration := AddFunctionDeclaration("", fmt.Sprintf("local_function_%08X", offset))
+	FUNC_DEFINITION_MAP[offset] = declaration
+
+	if declaration.parameters == nil {
+		declaration.returnTypeName = "task"
 		params := make([]FunctionParameter, parameterCount)
 		for ii := 0; ii < len(params); ii++ {
 			p := &params[ii]
