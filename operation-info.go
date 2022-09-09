@@ -102,6 +102,8 @@ const (
 	OP_ATOMIC_STOP  byte = 0x44
 
 	OP_JUMP_IF_NOT_DEBUG byte = 0x45
+
+	OP_REMOVED byte = 0xFF
 )
 
 var OP_MAP = map[byte]OperationInfo{
@@ -185,6 +187,8 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_ATOMIC_STOP:  {name: "OP_ATOMIC_STOP", dataSize: 0},
 
 	OP_JUMP_IF_NOT_DEBUG: {name: "OP_JUMP_IF_NOT_DEBUG", dataSize: 4, parser: ParseJump},
+
+	OP_REMOVED: {name: "OP_REMOVED", dataSize: 0, omit: true},
 }
 
 type PopStackData struct {

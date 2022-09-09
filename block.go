@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/juliangruber/go-intersect"
 )
@@ -240,6 +241,32 @@ func (wl *WhileLoop) IsBlock() bool {
 	return true
 }
 
+type DoWhileLoop struct {
+	conditional *Statement
+	body        []BlockElement
+}
+
+func (wl *DoWhileLoop) Render(writer CodeWriter) {
+	// Write out the top of the block
+
+	writer.Append("do\n")
+	writer.Append("{\n")
+	writer.PushIndent()
+
+	// Write out the body
+	RenderBlockElements(wl.body, writer)
+
+	// Write out the bottom of the block
+	writer.PopIndent()
+	writer.Append("} while ( ")
+	wl.conditional.Render(writer)
+	writer.Append(" );\n")
+}
+
+func (wl *DoWhileLoop) IsBlock() bool {
+	return true
+}
+
 type ForLoop struct {
 	init        *Statement
 	conditional *Statement
@@ -294,7 +321,7 @@ func isIfBlock(idx int, ops []Operation) int {
 				lastOp := ops[endIdx-1]
 				if lastOp.opcode == OP_JUMP {
 					jumpData := lastOp.data.(JumpData)
-					if jumpData.offset < op.offset {
+					if jumpData.offset < op.offset && jumpData.offset >= ops[0].offset {
 						return -1
 					}
 				}
@@ -320,7 +347,7 @@ func isForOrWhileLoop(idx int, ops []Operation) int {
 				lastOp := ops[endIdx-1]
 				if lastOp.opcode == OP_JUMP {
 					jumpData := lastOp.data.(JumpData)
-					if jumpData.offset < op.offset {
+					if jumpData.offset < op.offset && jumpData.offset >= ops[0].offset {
 						return endIdx
 					}
 				}
@@ -353,6 +380,20 @@ func shouldUseForLoop(init BlockElement, condition *Statement, increment BlockEl
 	intersection := intersect.Simple(intersect.Simple(initVariables, conditionVariables), incrementVariables)
 
 	return len(intersection) > 0
+}
+
+func isDoWhileLoop(idx int, ops []Operation) int {
+	for ii := len(ops) - 1; ii > idx; ii-- {
+		op := &ops[ii]
+		if op.opcode == OP_JUMP_IF_TRUE {
+			jumpData := op.data.(ConditionalJumpData)
+			if jumpData.offset == ops[idx].offset {
+				return ii
+			}
+		}
+	}
+
+	return -1
 }
 
 func isDebugBlock(idx int, ops []Operation) int {
@@ -424,6 +465,25 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 				statement = &Statement{
 					graph: node,
 				}
+			} else if jumpData.offset > ops[len(ops)-1].offset {
+				// If we are jumping beyond our current block, this should be a break statement
+				breakString := "break"
+				node.code = &breakString
+
+				statement = &Statement{
+					graph: node,
+				}
+			} else if jumpData.offset < ops[0].offset {
+				// If we are jumping before our current block, it must be a continue statement
+				continueString := "continue"
+				node.code = &continueString
+
+				statement = &Statement{
+					graph: node,
+				}
+			} else {
+				fmt.Printf("ERROR: Unhandled jump at offset 0x%08X", op.offset)
+				os.Exit(1)
 			}
 		} else if len(stack) == 0 && shouldRenderStatement(node) {
 			statement = &Statement{
@@ -446,14 +506,20 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 
 			if endOp.opcode == OP_JUMP {
 				jumpData := endOp.data.(JumpData)
-				if jumpData.offset > endOp.offset {
+				// Make sure this isn't a continue/break/return
+				if jumpData.offset > endOp.offset && jumpData.offset != scope.functionEndOffset {
 					elseEndIdx := offsetToOpIndex(jumpData.offset, ops)
-					elseChild := &ElseBlock{
-						body: ParseOperations(scope, ops[blockEnd:elseEndIdx+1]),
+					if elseEndIdx != -1 {
+						// Re-parse the operations excluding the jump at the end since it is for the else block
+						child.body = ParseOperations(scope, ops[idx+1:blockEnd-1])
+
+						elseChild := &ElseBlock{
+							body: ParseOperations(scope, ops[blockEnd:elseEndIdx+1]),
+						}
+						elements = append(elements, elseChild)
+						idx = elseEndIdx - 1
+						continue
 					}
-					elements = append(elements, elseChild)
-					idx = elseEndIdx - 1
-					continue
 				}
 			}
 
@@ -465,6 +531,9 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 		// Check for for/while loop
 		blockEnd = isForOrWhileLoop(idx, ops)
 		if blockEnd != -1 {
+			// Clear out the jump at the end since it has served it's purpose
+			ops[blockEnd-1].opcode = OP_REMOVED
+
 			// See if there is a last element in our current block
 			var lastElement BlockElement = nil
 			var lastBodyElement BlockElement = nil
@@ -512,11 +581,38 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 			continue
 		}
 
+		// Check for do-while loop
+		blockEnd = isDoWhileLoop(idx, ops)
+		if blockEnd != -1 {
+			// Reset the stack
+			stack = []*OpGraph{}
+
+			// We need to modify the opcode so we don't infinitely find do-while loops
+			ops[blockEnd].opcode = OP_POP_STACK
+			ops[blockEnd].data = PopStackData{}
+
+			loopBody := ParseOperations(scope, ops[idx:blockEnd+1])
+
+			// Remove the last statement from the body, that should be our conditional
+			conditional := loopBody[len(loopBody)-1].(*Statement)
+			loopBody = loopBody[:len(loopBody)-1]
+
+			child := &DoWhileLoop{
+				conditional: conditional,
+				body:        loopBody,
+			}
+
+			elements = append(elements, child)
+
+			idx = blockEnd
+			continue
+		}
+
 		// Check for debug block
 		blockEnd = isDebugBlock(idx, ops)
 		if blockEnd != -1 {
 			child := &DebugBlock{
-				body: ParseOperations(scope, ops[idx+1:blockEnd]),
+				body: ParseOperations(scope, ops[idx+1:blockEnd+1]),
 			}
 
 			elements = append(elements, child)
