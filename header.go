@@ -75,6 +75,16 @@ func parseInclude(path string) {
 
 	contents = removeComments(contents)
 
+	r, _ := regexp.Compile("(handle.*:.*;)")
+
+	all := r.FindAll(contents, -1)
+
+	for ii := range all {
+		handle := string(all[ii][len("handle") : len(all[ii])-1])
+		parts := strings.Split(handle, ":")
+		HANDLE_MAP[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+	}
+
 	fileScanner := bufio.NewScanner(bytes.NewReader(contents))
 	fileScanner.Split(scanPrototypes)
 

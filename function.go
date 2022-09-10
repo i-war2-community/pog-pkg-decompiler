@@ -117,6 +117,10 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 		result.parameters = &[]FunctionParameter{}
 	}
 
+	if result.returnTypeName == "task" {
+		result.returnTypeName = "htask"
+	}
+
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
 }
@@ -144,20 +148,15 @@ func writeLocalVariableDeclarations(variables []Variable, writer CodeWriter) {
 	}
 }
 
-func (og *OpGraph) String() string {
-	opInfo := OP_MAP[og.operation.opcode]
-	if og.operation.data != nil && len(og.operation.data.String()) > 0 {
-		return fmt.Sprintf(" %s[%s] ", opInfo.name, og.operation.data.String())
-	} else {
-		return fmt.Sprintf(" %s ", opInfo.name)
-	}
-}
-
 func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 	var sb strings.Builder
 
 	if len(declaration.returnTypeName) > 0 {
-		sb.WriteString(fmt.Sprintf("%s ", declaration.returnTypeName))
+		returnType := declaration.returnTypeName
+		if returnType == "htask" {
+			returnType = "task"
+		}
+		sb.WriteString(fmt.Sprintf("%s ", returnType))
 	}
 
 	sb.WriteString(declaration.name)
@@ -296,7 +295,24 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 					break
 				}
 			} else if len(v.possibleTypes) > 1 {
-				v.typeName = "UNKNOWN"
+				// If we have handle types, find the most concrete one
+				baseType := "hobject"
+				derivedType := ""
+
+				for typeName := range v.possibleTypes {
+					// If this
+					if HandleIsDerivedFrom(typeName, baseType) {
+						derivedType = typeName
+						baseType = typeName
+					} else if HandleIsDerivedFrom(baseType, typeName) {
+						derivedType = baseType
+					} else {
+						v.typeName = "UNKNOWN"
+						break
+					}
+				}
+
+				v.typeName = derivedType
 			}
 		}
 	}

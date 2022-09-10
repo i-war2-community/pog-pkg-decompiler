@@ -1,5 +1,9 @@
 package main
 
+var HANDLE_MAP map[string]string = map[string]string{
+	"htask": "hobject",
+}
+
 type Variable struct {
 	typeName      string
 	variableName  string
@@ -23,4 +27,15 @@ func (s Scope) GetVariableByStackIndex(stackIndex uint32) *Variable {
 		}
 	}
 	return nil
+}
+
+func HandleIsDerivedFrom(handleType string, baseType string) bool {
+	if handleType == baseType {
+		return true
+	}
+	_, ok := HANDLE_MAP[handleType]
+	if !ok {
+		return false
+	}
+	return HandleIsDerivedFrom(HANDLE_MAP[handleType], baseType)
 }

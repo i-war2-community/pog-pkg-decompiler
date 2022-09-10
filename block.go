@@ -20,6 +20,15 @@ type OpGraph struct {
 	typeName  string
 }
 
+func (og *OpGraph) String() string {
+	opInfo := OP_MAP[og.operation.opcode]
+	if og.operation.data != nil && len(og.operation.data.String()) > 0 {
+		return fmt.Sprintf(" %s[%s] ", opInfo.name, og.operation.data.String())
+	} else {
+		return fmt.Sprintf(" %s ", opInfo.name)
+	}
+}
+
 func (og *OpGraph) GetVariableIndices() []uint32 {
 	result := []uint32{}
 
