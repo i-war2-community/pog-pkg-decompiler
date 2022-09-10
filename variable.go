@@ -1,7 +1,15 @@
 package main
 
-var HANDLE_MAP map[string]string = map[string]string{
-	"htask": "hobject",
+type HandleTypeInfo struct {
+	baseType      string
+	sourcePackage string
+}
+
+var HANDLE_MAP map[string]HandleTypeInfo = map[string]HandleTypeInfo{
+	"htask": HandleTypeInfo{
+		baseType:      "hobject",
+		sourcePackage: "__system",
+	},
 }
 
 type Variable struct {
@@ -9,7 +17,7 @@ type Variable struct {
 	variableName  string
 	stackIndex    uint32
 	possibleTypes map[string]bool
-	setCount      int
+	refCount      int
 }
 
 type Scope struct {
@@ -37,5 +45,5 @@ func HandleIsDerivedFrom(handleType string, baseType string) bool {
 	if !ok {
 		return false
 	}
-	return HandleIsDerivedFrom(HANDLE_MAP[handleType], baseType)
+	return HandleIsDerivedFrom(HANDLE_MAP[handleType].baseType, baseType)
 }

@@ -11,7 +11,31 @@ import (
 	"strings"
 )
 
-var PACKAGES = map[string]string{}
+type PackageInfo struct {
+	name         string
+	functions    []*FunctionDeclaration
+	dependencies map[string]bool
+}
+
+var PACKAGES = map[string]*PackageInfo{}
+
+func (pkg *PackageInfo) DetectDepdencies() {
+	for _, fnc := range pkg.functions {
+		// Check the return type
+		if handleInfo, ok := HANDLE_MAP[fnc.returnTypeName]; ok {
+			pkg.dependencies[handleInfo.sourcePackage] = true
+		}
+
+		// Check the parameters
+		if fnc.parameters != nil {
+			for _, p := range *fnc.parameters {
+				if handleInfo, ok := HANDLE_MAP[p.typeName]; ok {
+					pkg.dependencies[handleInfo.sourcePackage] = true
+				}
+			}
+		}
+	}
+}
 
 func parseEntry(path string, d fs.DirEntry, err error) error {
 	if strings.ToLower(filepath.Ext(path)) == ".h" {
@@ -65,7 +89,12 @@ func parseInclude(path string) {
 	// Save off the package name with the proper upper and lower cases based on the filenames (for now, so far this seems to match)
 	packageName := filepath.Base(path)
 	packageName = strings.TrimSuffix(packageName, filepath.Ext(packageName))
-	PACKAGES[strings.ToLower(packageName)] = packageName
+	packageInfo := PackageInfo{
+		name:         packageName,
+		functions:    []*FunctionDeclaration{},
+		dependencies: map[string]bool{},
+	}
+	PACKAGES[strings.ToLower(packageName)] = &packageInfo
 
 	contents, err := os.ReadFile(path)
 	if err != nil {
@@ -82,7 +111,10 @@ func parseInclude(path string) {
 	for ii := range all {
 		handle := string(all[ii][len("handle") : len(all[ii])-1])
 		parts := strings.Split(handle, ":")
-		HANDLE_MAP[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		HANDLE_MAP[strings.TrimSpace(parts[0])] = HandleTypeInfo{
+			baseType:      strings.TrimSpace(parts[1]),
+			sourcePackage: packageName,
+		}
 	}
 
 	fileScanner := bufio.NewScanner(bytes.NewReader(contents))
@@ -100,10 +132,20 @@ func parseInclude(path string) {
 		prototype = strings.ReplaceAll(prototype, "\r", "")
 		prototype = strings.ReplaceAll(prototype, "\n", "")
 
-		AddFunctionDeclarationFromPrototype(prototype)
+		declaration := AddFunctionDeclarationFromPrototype(prototype)
+		if declaration != nil {
+			packageInfo.functions = append(packageInfo.functions, declaration)
+		}
 	}
 }
 
 func LoadFunctionDeclarationsFromHeaders(includeDir string) {
 	filepath.WalkDir(includeDir, parseEntry)
+}
+
+func DetectPackageDependencies() {
+	// Look through every function in every package to see if they have parameters or return types from other packages
+	for _, pkg := range PACKAGES {
+		pkg.DetectDepdencies()
+	}
 }

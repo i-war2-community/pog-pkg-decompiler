@@ -11,6 +11,10 @@ type Operation struct {
 	data   OperationData
 }
 
+func (op *Operation) Remove() {
+	op.opcode = OP_REMOVED
+}
+
 func (op *Operation) WriteAssembly(writer CodeWriter) {
 	opInfo := OP_MAP[op.opcode]
 	writer.Append(opInfo.name)

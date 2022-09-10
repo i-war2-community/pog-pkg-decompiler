@@ -1,0 +1,754 @@
+package LocationFinder;
+
+uses Sim,
+     iHUD,
+     iAI,
+     iUtilities,
+     String,
+     iHabitat,
+     INIFile,
+     Text,
+     Object,
+     iShip,
+     iSim,
+     GUI,
+     iDirector,
+     Set,
+     Global,
+     iGUI,
+     Task,
+     Input,
+     Debug,
+     iFaction,
+     iMapEntity,
+     igame,
+     List;
+
+provides Initialise,
+         LocationFinderToggle,
+         LocationFinderScreen,
+         OnSelectSystem,
+         OnSelectLocation,
+         OnQuit,
+         OnSetWaypoint,
+         OnClearWaypoint,
+         OnPDA;
+
+prototype OnPDA();
+prototype OnQuit();
+prototype task local_function_0000007E( hsim param_0 );
+prototype OnSetWaypoint();
+prototype OnClearWaypoint();
+prototype local_function_0000038A( hobject param_0 );
+prototype OnSelectLocation();
+prototype OnSelectSystem();
+prototype list local_function_00000556( string param_0 );
+prototype list local_function_0000095B( hwindow param_0 );
+prototype hwindow local_function_00000C8E( hwindow param_0, string param_1, int param_2, int param_3, bool param_4 );
+prototype local_function_00000F99();
+prototype hwindow local_function_0000108E();
+prototype local_function_000017B5( string param_0, string param_1, string param_2, bool param_3 );
+prototype local_function_00001B11( hwindow param_0 );
+prototype LocationFinderScreen();
+prototype task local_function_000021F3();
+prototype task local_function_00002203( hwindow param_0 );
+prototype LocationFinderToggle();
+prototype Initialise();
+
+OnPDA()
+{
+	GUI.SetRHSShadyBarWidth( 0 );
+}
+
+OnQuit()
+{
+	Task.Halt( Task.Cast( Global.Handle( "g_lf_text_box_monitor_task" ) ) );
+	GUI.SetRHSShadyBarWidth( 0 );
+	GUI.RemoveOverlaysAfter( "icSpaceFlightScreenOverlay" );
+	Global.SetBool( "g_lf_screen_active", false );
+}
+
+task local_function_0000007E( hsim param_0 )
+{
+	Task.Sleep( Task.Current(), 0.100000 );
+	iHUD.SetTarget( param_0 );
+}
+
+OnSetWaypoint()
+{
+	hisim local_0;
+	hisim local_1;
+	hwindow local_2;
+	string local_3;
+	string local_4;
+	float local_5;
+	
+	local_0 = iSim.Cast( Global.Handle( "g_lf_location_handle" ) );
+	local_1 = iSim.Cast( Global.Handle( "g_lf_location_waypoint" ) );
+	local_2 = GUI.Cast( Global.Handle( "g_lf_location_text_box_handle" ) );
+	local_3 = Object.StringProperty( local_0, "name" );
+	Sim.Destroy( local_1 );
+	local_4 = String.Join( "lf_prefix+", Object.StringProperty( local_0, "name" ) );
+	local_1 = iSim.Cast( Sim.Create( "ini:/sims/nav/waypoint", local_4 ) );
+	Object.AddStringProperty( local_1, "location_name", local_3 );
+	local_5 = iAI.AvoidanceRadius( local_0, iShip.FindPlayerShip() ) + 1000.000000;
+	Sim.PlaceRelativeTo( local_1, local_0, 0.000000, local_5, 0.000000 );
+	iSim.SetSensorVisibility( local_1, true );
+	Global.SetHandle( "g_lf_location_waypoint", local_1 );
+	Global.SetString( "g_lf_waypoint_system", Global.String( "g_lf_selected_system" ) );
+	local_function_000017B5( Text.Field( local_3, 0 ), Global.String( "g_lf_selected_system" ), iFaction.Name( iSim.Faction( local_0 ) ), true );
+	Task.Detach( start local_function_0000007E( local_1 ) );
+}
+
+OnClearWaypoint()
+{
+	hsim local_0;
+	
+	local_0 = Sim.Cast( Global.Handle( "g_lf_location_waypoint" ) );
+	Sim.Destroy( local_0 );
+	local_function_00000F99();
+	Global.SetHandle( "g_lf_location_waypoint", 0 );
+}
+
+local_function_0000038A( hobject param_0 )
+{
+	hsim local_0;
+	
+	local_0 = Sim.Cast( Object.HandleProperty( param_0, "location_handle" ) );
+	Global.SetHandle( "g_lf_location_handle", local_0 );
+	
+	debug Debug.PrintString( "LocationFinder: Location selected = " );
+	
+	debug Debug.PrintString( Text.Field( Object.StringProperty( local_0, "name" ), 0 ) );
+	
+	debug Debug.PrintString( "\n" );
+}
+
+OnSelectLocation()
+{
+	hwindow local_0;
+	
+	local_0 = GUI.FocusedWindow();
+	local_function_0000038A( local_0 );
+}
+
+OnSelectSystem()
+{
+	hwindow local_0;
+	list local_1;
+	
+	local_0 = GUI.FocusedWindow();
+	local_1 = local_function_00000556( Object.StringProperty( local_0, "system_map" ) );
+	Global.SetList( "g_lf_location_list", local_1 );
+	Global.SetString( "g_lf_selected_system", Object.StringProperty( local_0, "system_name" ) );
+	GUI.DeleteWindow( GUI.Cast( Global.Handle( "g_lf_location_window" ) ) );
+	local_function_0000108E();
+}
+
+list local_function_00000556( string param_0 )
+{
+	set local_0;
+	set local_1;
+	set local_2;
+	hmapentity local_3;
+	list local_5;
+	string local_6;
+	
+	local_0 = iHabitat.FilterOrbiting( iMapEntity.SystemHabitatsInSystem( param_0 ) );
+	local_1 = iMapEntity.SystemLagrangePointsInSystem( param_0 );
+	Set.Union( local_2, local_0 );
+	Set.Union( local_2, local_1 );
+	
+	debug
+	{
+		Debug.PrintString( "LocationFinder: System = " );
+		Debug.PrintString( param_0 );
+		Debug.PrintString( " Habitats found = " );
+		Debug.PrintInt( Set.ItemCount( local_0 ) );
+		Debug.PrintString( ", L-Points found = " );
+		Debug.PrintInt( Set.ItemCount( local_1 ) );
+		Debug.PrintString( ", Total = " );
+		Debug.PrintInt( Set.ItemCount( local_2 ) );
+		Debug.PrintString( "\n" );
+	}
+	
+	debug Debug.PrintString( "LocationFinder.create_location_list: Filtering locations and building buttons\n" );
+	
+	do
+	{
+		local_3 = iMapEntity.Cast( Set.FirstElement( local_2 ) );
+		Set.Remove( local_2, local_3 );
+		
+		if ( !iMapEntity.IsVisibleOnMap( local_3 ) )
+		{
+			debug atomic
+			{
+				Debug.PrintString( "LocationFinder: Filtering non-map visible location - " );
+				Debug.PrintString( Object.StringProperty( local_3, "name" ) );
+				Debug.PrintString( "\n" );
+			}
+		}
+		else if ( iMapEntity.IsHidden( local_3 ) )
+		{
+			debug atomic
+			{
+				Debug.PrintString( "LocationFinder: Filtering hidden location - " );
+				Debug.PrintString( Object.StringProperty( local_3, "name" ) );
+				Debug.PrintString( "\n" );
+			}
+		}
+		else
+		{
+			local_6 = Text.Field( Object.StringProperty( local_3, "name" ), 0 );
+			Object.AddStringProperty( local_3, "location_name", local_6 );
+			List.AddTail( local_5, local_3 );
+			
+			atomic
+			{
+				debug
+				{
+					Debug.PrintString( "LocationFinder: Adding Valid Location - " );
+					Debug.PrintString( Object.StringProperty( local_3, "name" ) );
+					Debug.PrintString( "\n" );
+				}
+			}
+		}
+	} while ( !Set.IsEmpty( local_2 ) );
+	
+	debug Debug.PrintString( "LocationFinder.create_location_list: Finished building buttons.\n" );
+	
+	return List.SortByStringProperty( local_5, "location_name" );
+}
+
+list local_function_0000095B( hwindow param_0 )
+{
+	list local_0;
+	hwindow local_3;
+	string local_4;
+	string local_5;
+	int local_8;
+	int local_9;
+	int local_10;
+	int local_11;
+	int local_12;
+	hinifile local_13;
+	
+	local_10 = Global.Int( "GUI_inversebutton_height" );
+	local_11 = 3;
+	local_12 = Global.Int( "GUI_inversebutton_width" );
+	local_13 = INIFile.Create( "ini:/geog/clusters" );
+	local_8 = iUtilities.FindNumberOfINIEntries( local_13, "badlands", "system" );
+	
+	for ( local_9 = 0; local_9 < local_8; local_9 = local_9 + 1 )
+	{
+		local_4 = INIFile.NumberedString( local_13, "badlands", "name", local_9, "Name Error!" );
+		local_5 = INIFile.NumberedString( local_13, "badlands", "system", local_9, "map:/geog/badlands/hoffers_wake" );
+		
+		debug atomic
+		{
+			Debug.PrintString( "LocationFinder: Creating button for system - " );
+			Debug.PrintString( Text.Field( local_4, 0 ) );
+			Debug.PrintString( "\n" );
+		}
+		
+		local_3 = iGUI.CreateAndInitialiseRectangularInverseRadioButton( 0, 0, 0, local_12, Text.Field( local_4, 0 ), false );
+		iGUI.MakeRectangularInverseButtonIconic( local_3 );
+		Object.AddStringProperty( local_3, "system_name", Text.Field( local_4, 0 ) );
+		Object.AddStringProperty( local_3, "system_map", local_5 );
+		GUI.SetInputOverrideFunctions( local_3, "", "", "", "", "", "", "LocationFinder.OnSelectSystem", "", "" );
+		List.AddTail( local_0, local_3 );
+	}
+	
+	INIFile.Destroy( local_13 );
+	local_0 = List.SortByStringProperty( local_0, "system_name" );
+	
+	for ( local_9 = 0; local_9 < List.ItemCount( local_0 ); local_9 = local_9 + 1 )
+	{
+		GUI.AddListBoxEntry( param_0, GUI.Cast( List.GetNth( local_0, local_9 ) ) );
+	}
+	
+	return local_0;
+}
+
+hwindow local_function_00000C8E( hwindow param_0, string param_1, int param_2, int param_3, bool param_4 )
+{
+	hwindow local_0;
+	hwindow local_1;
+	string local_3;
+	int local_4;
+	int local_5;
+	int local_6;
+	int local_8;
+	hwindow local_9;
+	hwindow local_11;
+	list local_13;
+	int local_14;
+	int local_15;
+	int local_16;
+	int local_17;
+	int local_18;
+	int local_19;
+	
+	local_3 = Global.String( "GUI_subtitle_font" );
+	local_4 = Global.Int( "GUI_inversebutton_height" );
+	local_5 = 3;
+	local_6 = Global.Int( "GUI_inversebutton_width" );
+	local_8 = Global.Int( "GUI_scrollbar_width" );
+	local_16 = 120;
+	local_17 = 4;
+	local_18 = (2 * Global.Int( "GUI_fancyborder_width" )) + 13;
+	local_19 = 10;
+	local_14 = Global.Int( "GUI_alignment_offset" ) + local_17;
+	local_15 = Global.Int( "GUI_shader_width" ) + (local_17 - (local_14 * 2));
+	
+	if ( param_3 == -1 )
+	{
+		param_3 = GUI.WindowCanvasHeight( param_0 ) - (param_2 + local_16);
+	}
+	
+	local_11 = GUI.CreateSplitterWindow( local_14, param_2, local_15, param_3, param_0, local_18, false );
+	local_0 = GUI.SplitterWindowTopWindow( local_11 );
+	local_1 = iGUI.CreateAndInitialiseStaticWindow( 0, 0, GUI.WindowCanvasWidth( local_0 ), GUI.WindowCanvasHeight( local_0 ), local_0, local_3, Text.Field( param_1, 0 ) );
+	GUI.SetWindowTextFormatting( local_1, false, 9 );
+	local_0 = GUI.SplitterWindowBottomWindow( local_11 );
+	
+	if ( param_4 )
+	{
+		local_6 = local_6 - (local_8 + 4);
+	}
+	
+	local_9 = GUI.CreateListBox( 0, 0, local_6, GUI.WindowCanvasHeight( local_0 ), local_0, true, false );
+	List.AddHead( local_13, local_9 );
+	
+	if ( param_4 )
+	{
+		GUI.CreateVerticalScrollbar( GUI.WindowCanvasWidth( local_0 ) - local_8, 0, local_8, GUI.WindowCanvasHeight( local_0 ), local_0, local_9, Global.Float( "GUI_scrollbar_buttonratio" ), "" );
+	}
+	
+	return local_9;
+}
+
+local_function_00000F99()
+{
+	hwindow local_0;
+	hwindow local_1;
+	string local_2;
+	
+	local_0 = GUI.Cast( Global.Handle( "g_lf_location_text_box_upper_handle" ) );
+	local_1 = GUI.Cast( Global.Handle( "g_lf_location_text_box_lower_handle" ) );
+	local_2 = Text.Field( "lf_no_waypoint_set", 0 );
+	local_2 = String.Join( "<HTML><BODY>", local_2 );
+	local_2 = String.Join( local_2, "</HTML></BODY>" );
+	GUI.SetTextWindowString( local_0, local_2 );
+	GUI.SetTextWindowString( local_1, "" );
+}
+
+hwindow local_function_0000108E()
+{
+	hwindow local_0;
+	hwindow local_1;
+	hwindow local_2;
+	hwindow local_3;
+	hwindow local_4;
+	string local_5;
+	int local_6;
+	int local_7;
+	int local_8;
+	list local_9;
+	int local_10;
+	int local_11;
+	int local_12;
+	int local_13;
+	int local_14;
+	int local_15;
+	int local_16;
+	int local_17;
+	hmapentity local_18;
+	string local_19;
+	int local_20;
+	hwindow local_21;
+	int local_22;
+	int local_23;
+	list local_24;
+	int local_25;
+	string local_26;
+	
+	local_2 = GUI.Cast( Global.Handle( "g_lf_shady_bar" ) );
+	local_5 = Global.String( "GUI_subtitle_font" );
+	local_6 = Global.Int( "GUI_inversebutton_height" );
+	local_7 = 3;
+	local_14 = 120;
+	local_15 = 4;
+	local_16 = (2 * Global.Int( "GUI_fancyborder_width" )) + 13;
+	local_17 = 10;
+	local_20 = 19;
+	local_23 = Global.Int( "GUI_inversebutton_width" );
+	local_25 = Global.Int( "GUI_scrollbar_width" );
+	local_10 = Global.Int( "GUI_alignment_offset" ) + local_15;
+	local_11 = 0;
+	local_12 = Global.Int( "GUI_shader_width" ) + (local_15 - (local_10 * 2));
+	local_13 = GUI.WindowCanvasHeight( local_2 ) - (local_11 + local_14);
+	local_4 = GUI.CreateSplitterWindow( local_10, local_11, local_12, local_13, local_2, local_16, false );
+	Global.SetHandle( "g_lf_location_window", local_4 );
+	local_0 = GUI.SplitterWindowTopWindow( local_4 );
+	local_1 = iGUI.CreateAndInitialiseStaticWindow( 0, 0, GUI.WindowCanvasWidth( local_0 ), GUI.WindowCanvasHeight( local_0 ), local_0, local_5, local_26 );
+	Global.SetHandle( "g_lf_location_title_window", local_1 );
+	GUI.SetWindowTextFormatting( local_1, false, 9 );
+	local_0 = GUI.SplitterWindowBottomWindow( local_4 );
+	local_23 = local_23 - (local_25 + 4);
+	local_3 = GUI.CreateListBox( 0, 0, local_23, GUI.WindowCanvasHeight( local_0 ), local_0, true, false );
+	Global.SetHandle( "g_lf_location_list_box_handle", local_3 );
+	GUI.CreateVerticalScrollbar( GUI.WindowCanvasWidth( local_0 ) - local_25, 0, local_25, GUI.WindowCanvasHeight( local_0 ), local_0, local_3, Global.Float( "GUI_scrollbar_buttonratio" ), "" );
+	local_9 = Global.List( "g_lf_location_list" );
+	local_22 = List.ItemCount( local_9 );
+	local_26 = String.Join( local_26, String.FromInt( List.ItemCount( local_9 ) ) );
+	local_26 = String.Join( local_26, " " );
+	
+	if ( local_22 == 1 )
+	{
+		local_26 = String.Join( local_26, Text.Field( "lf_viewing_location", 0 ) );
+	}
+	else
+	{
+		local_26 = String.Join( local_26, Text.Field( "lf_locations", 0 ) );
+	}
+	
+	GUI.SetWindowTitle( GUI.Cast( Global.Handle( "g_lf_location_title_window" ) ), local_26 );
+	GUI.SetWindowTextFormatting( GUI.Cast( Global.Handle( "g_lf_location_title_window" ) ), false, 0 );
+	
+	atomic
+	{
+		for ( local_8 = 0; local_8 < local_22; local_8 = local_8 + 1 )
+		{
+			local_18 = iMapEntity.Cast( List.GetNth( local_9, local_8 ) );
+			local_19 = Object.StringProperty( local_18, "location_name" );
+			
+			debug
+			{
+				Debug.PrintString( "LocationFinder: Creating button for location - " );
+				Debug.PrintString( local_19 );
+				Debug.PrintString( "\n" );
+			}
+			
+			if ( String.Length( local_19 ) >= local_20 )
+			{
+				local_19 = String.Left( local_19, local_20 );
+				local_19 = String.Join( local_19, "..." );
+			}
+			
+			local_21 = iGUI.CreateAndInitialiseRectangularInverseRadioButton( 0, 0, 0, local_23, local_19, false );
+			iGUI.MakeRectangularInverseButtonIconic( local_21 );
+			List.AddTail( local_24, local_21 );
+			GUI.SetInputOverrideFunctions( local_21, "", "", "", "", "", "", "LocationFinder.OnSelectLocation", "", "" );
+			Object.AddHandleProperty( local_21, "location_handle", List.GetNth( local_9, local_8 ) );
+			Object.AddStringProperty( local_21, "location_name", local_19 );
+			GUI.AddListBoxEntry( local_3, local_21 );
+		}
+		
+		GUI.SelectListBoxEntry( local_3, 0 );
+		local_21 = GUI.Cast( List.Head( local_24 ) );
+		local_function_0000038A( local_21 );
+	}
+	
+	return local_4;
+}
+
+local_function_000017B5( string param_0, string param_1, string param_2, bool param_3 )
+{
+	hwindow local_0;
+	hwindow local_1;
+	string local_2;
+	string local_3;
+	string local_4;
+	string local_5;
+	string local_6;
+	string local_7;
+	string local_8;
+	
+	local_0 = GUI.Cast( Global.Handle( "g_lf_location_text_box_upper_handle" ) );
+	local_1 = GUI.Cast( Global.Handle( "g_lf_location_text_box_lower_handle" ) );
+	local_3 = "<HTML><BODY>";
+	local_4 = "</BODY></HTML>";
+	local_5 = Text.Field( "lf_viewing_location", 0 );
+	local_6 = Text.Field( "lf_selected_location", 0 );
+	local_7 = Text.Field( "lf_system", 0 );
+	local_8 = Text.Field( "trading_faction", 0 );
+	
+	if ( param_3 )
+	{
+		local_2 = String.Join( local_3, local_6 );
+	}
+	else
+	{
+		local_2 = String.Join( local_3, local_5 );
+	}
+	
+	local_2 = String.Join( local_2, ":<BR>" );
+	local_2 = String.Join( local_2, param_0 );
+	local_2 = String.Join( local_2, local_4 );
+	GUI.SetTextWindowString( local_0, local_2 );
+	local_2 = String.Join( local_3, "<BR>" );
+	local_2 = String.Join( local_2, local_7 );
+	local_2 = String.Join( local_2, ": " );
+	local_2 = String.Join( local_2, param_1 );
+	local_2 = String.Join( local_2, "<BR>" );
+	local_2 = String.Join( local_2, local_8 );
+	local_2 = String.Join( local_2, ": " );
+	local_2 = String.Join( local_2, Text.Field( param_2, 0 ) );
+	local_2 = String.Join( local_2, local_4 );
+	GUI.SetTextWindowString( local_1, local_2 );
+}
+
+local_function_00001B11( hwindow param_0 )
+{
+	hwindow local_0;
+	hwindow local_1;
+	hwindow local_2;
+	int local_3;
+	int local_4;
+	int local_5;
+	int local_6;
+	int local_7;
+	int local_8;
+	
+	local_3 = 24;
+	local_4 = 4;
+	local_5 = 80;
+	local_6 = Global.Int( "GUI_alignment_offset" ) + local_4;
+	local_7 = GUI.WindowCanvasHeight( param_0 ) - (local_5 + local_3);
+	local_8 = Global.Int( "GUI_shader_width" ) - (local_6 * 2);
+	local_0 = GUI.CreateStaticWindow( local_6, local_7, local_8, local_5, param_0 );
+	GUI.CreateBorder( local_0 );
+	local_1 = GUI.CreateTextWindow( local_6, local_7, local_8, local_5 / 2, param_0 );
+	local_2 = GUI.CreateTextWindow( local_6, local_7 + (local_5 / 2), local_8, local_5 / 2, param_0 );
+	GUI.SetWindowFont( local_1, Global.String( "GUI_detail_font" ) );
+	GUI.SetWindowFont( local_2, Global.String( "GUI_detail_font" ) );
+	Global.SetHandle( "g_lf_location_text_box_upper_handle", local_1 );
+	Global.SetHandle( "g_lf_location_text_box_lower_handle", local_2 );
+}
+
+LocationFinderScreen()
+{
+	hwindow local_0;
+	hwindow local_1;
+	hobject local_2;
+	hwindow local_3;
+	hwindow local_5;
+	int local_6;
+	int local_7;
+	int local_8;
+	list local_9;
+	list local_10;
+	list local_12;
+	htask local_14;
+	string local_15;
+	
+	local_15 = iSim.ActiveWorld();
+	GUI.StopAllMovies();
+	GUI.SetDefaultFont( Global.String( "GUI_title_font" ) );
+	local_0 = iGUI.CreateShadyBar();
+	local_1 = iGUI.CreateShadyBarRight();
+	Global.SetHandle( "g_lf_shady_bar", local_1 );
+	iGUI.AddTitle( local_0, Text.Field( "lf_location_finder", 0 ) );
+	local_3 = local_function_00000C8E( local_0, Text.Field( "lf_system", 0 ), Global.Int( "GUI_title_yoffset" ) + 23, 335, false );
+	Global.SetHandle( "g_lf_system_listbox_handle", local_3 );
+	GUI.SetListBoxSelectFunction( local_3, "LocationFinder.OnSystemSelect" );
+	local_10 = local_function_0000095B( local_3 );
+	Global.SetList( "g_lf_system_button_list", local_10 );
+	
+	for ( local_6 = 0; local_6 < List.ItemCount( local_10 ); local_6 = local_6 + 1 )
+	{
+		local_5 = GUI.Cast( List.GetNth( local_10, local_6 ) );
+		
+		if ( Object.StringProperty( local_5, "system_map" ) == local_15 )
+		{
+			Global.SetString( "g_lf_selected_system", Object.StringProperty( local_5, "system_name" ) );
+			GUI.SelectListBoxEntry( local_3, local_6 );
+			break;
+		}
+	}
+	
+	local_5 = iGUI.CreateAndInitialiseParentlessInverseButton( "LocationFinder.OnSetWaypoint", Text.Field( "lf_set_waypoint", 0 ), local_12 );
+	GUI.SetInputOverrideFunctions( local_5, "", "", "", "", "", "LocationFinder.OnQuit", "", "", "" );
+	local_5 = iGUI.CreateAndInitialiseParentlessInverseButton( "LocationFinder.OnClearWaypoint", Text.Field( "lf_clear_waypoint", 0 ), local_12 );
+	GUI.SetInputOverrideFunctions( local_5, "", "", "", "", "", "LocationFinder.OnQuit", "", "", "" );
+	local_7 = Global.Int( "GUI_alignment_offset" ) + Global.Int( "GUI_fancyborder_alignmentoffset" );
+	local_8 = GUI.WindowCanvasHeight( local_0 ) - 90;
+	iGUI.CreateWindowListInFancyBorder( local_0, local_12, local_7, local_8 );
+	local_5 = iGUI.CreateAndInitialiseFancyButton( local_0, GUI.WindowCanvasHeight( local_0 ) - (Global.Int( "GUI_fancybutton_height" ) + 8), Text.Field( "lf_exit", 0 ), "LocationFinder.OnQuit" );
+	local_9 = local_function_00000556( local_15 );
+	Global.SetList( "g_lf_location_list", local_9 );
+	local_2 = local_function_0000108E();
+	Global.SetHandle( "g_lf_location_window", local_2 );
+	local_function_00001B11( local_1 );
+	local_14 = start local_function_00002203( local_3 );
+	Global.SetHandle( "g_lf_text_box_monitor_task", local_14 );
+	Task.Detach( local_14 );
+}
+
+task local_function_000021F3()
+{
+	OnQuit();
+}
+
+task local_function_00002203( hwindow param_0 )
+{
+	bool local_0;
+	hwindow local_2;
+	int local_3;
+	int local_4;
+	int local_5;
+	int local_6;
+	hwindow local_7;
+	hwindow local_8;
+	hmapentity local_9;
+	string local_10;
+	string local_11;
+	string local_12;
+	bool local_14;
+	
+	local_0 = false;
+	local_4 = -1;
+	local_5 = GUI.ListBoxSelectedIndex( param_0 );
+	local_6 = local_5;
+	local_7 = GUI.ListBoxValue( param_0 );
+	local_8 = local_7;
+	local_10 = "None";
+	local_11 = "None";
+	local_12 = "None";
+	local_14 = true;
+	
+	while ( 1 )
+	{
+		if ( iDirector.IsBusy() )
+		{
+			Task.Detach( start local_function_000021F3() );
+			return;
+		}
+		
+		if ( iSim.IsCapsuleJumping( iShip.FindPlayerShip() ) )
+		{
+			Task.Detach( start local_function_000021F3() );
+			return;
+		}
+		
+		if ( (iDirector.Camera() != 1) && (iDirector.Camera() != 2) )
+		{
+			Task.Detach( start local_function_000021F3() );
+			return;
+		}
+		
+		local_2 = GUI.Cast( Global.Handle( "g_lf_location_list_box_handle" ) );
+		local_3 = GUI.ListBoxFocusedEntry( local_2 );
+		
+		if ( local_3 != -1 )
+		{
+			if ( local_3 != local_4 )
+			{
+				local_9 = iMapEntity.Cast( List.GetNth( Global.List( "g_lf_location_list" ), local_3 ) );
+				local_10 = Text.Field( Object.StringProperty( local_9, "name" ), 0 );
+				local_11 = Global.String( "g_lf_selected_system" );
+				local_12 = iFaction.Name( iSim.Faction( local_9 ) );
+				local_function_000017B5( local_10, local_11, local_12, false );
+				local_4 = local_3;
+			}
+			
+			local_14 = true;
+		}
+		else
+		{
+			local_4 = -1;
+			
+			if ( local_14 )
+			{
+				local_9 = iSim.Cast( Global.Handle( "g_lf_location_waypoint" ) );
+				local_10 = Text.Field( Object.StringProperty( local_9, "location_name" ), 0 );
+				local_11 = Global.String( "g_lf_waypoint_system" );
+				local_12 = iFaction.Name( iSim.Faction( local_9 ) );
+				
+				if ( local_9 == 0 )
+				{
+					local_function_00000F99();
+				}
+				else
+				{
+					local_function_000017B5( local_10, local_11, local_12, true );
+				}
+				
+				local_14 = false;
+			}
+		}
+		
+		Task.Sleep( Task.Current(), 0.100000 );
+	}
+}
+
+LocationFinderToggle()
+{
+	if ( iDirector.IsBusy() )
+	{
+		debug Debug.PrintString( "LocationFinderToggle: Not running. Director mode active.\n" );
+		
+		return;
+	}
+	
+	if ( iSim.IsCapsuleJumping( iShip.FindPlayerShip() ) )
+	{
+		debug Debug.PrintString( "LocationFinderToggle: Not running. Player is capsule jumping.\n" );
+		
+		return;
+	}
+	
+	if ( (iDirector.Camera() != 1) && (iDirector.Camera() != 2) )
+	{
+		debug Debug.PrintString( "LocationFinderToggle: Not running. Player is capsule jumping.\n" );
+		
+		iHUD.PlayAudioCue( 1 );
+		return;
+	}
+	
+	if ( Global.Bool( "g_lf_screen_active" ) == 0 )
+	{
+		Global.SetBool( "g_lf_screen_active", true );
+		GUI.PopScreensTo( "icSpaceFlightScreen" );
+		GUI.OverlayScreen( "icPDAOverlayManager" );
+		iGUI.OverlayCustomScreen( "LocationFinder.LocationFinderScreen" );
+		return;
+	}
+	
+	OnQuit();
+}
+
+Initialise()
+{
+	list local_0;
+	
+	if ( igame.GameType() != 0 )
+	{
+		debug Debug.PrintString( "LocationFinder.Initialise: Not Initialising. Game is not in single player mode.\n" );
+		
+		return;
+	}
+	
+	debug Debug.PrintString( "LocationFinder.Initialise: Initialising globals and key bindings\n" );
+	
+	Global.CreateHandle( "g_lf_text_box_monitor_task", 10, 0 );
+	Global.CreateHandle( "g_lf_location_list_box_handle", 10, 0 );
+	Global.CreateHandle( "g_lf_location_text_box_upper_handle", 10, 0 );
+	Global.CreateHandle( "g_lf_location_text_box_lower_handle", 10, 0 );
+	Global.CreateHandle( "g_lf_shady_bar", 10, 0 );
+	Global.CreateHandle( "g_lf_system_listbox_handle", 10, 0 );
+	Global.CreateHandle( "g_lf_location_title_window", 10, 0 );
+	Global.CreateHandle( "g_lf_location_window", 10, 0 );
+	Global.CreateHandle( "g_lf_location_handle", 10, 0 );
+	Global.CreateHandle( "g_lf_location_waypoint", 10, 0 );
+	Global.CreateList( "g_lf_location_list", 10, local_0 );
+	Global.CreateList( "g_lf_system_button_list", 10, local_0 );
+	Global.CreateString( "g_lf_selected_system", 10, "" );
+	Global.CreateString( "g_lf_waypoint_system", 10, "" );
+	Global.CreateBool( "g_lf_screen_active", 10, false );
+	Input.BindKey( "LocationFinder.LocationFinderToggle", "Multiplayer.Score" );
+	Input.BindKey( "LocationFinder.OnPDA", "SpaceFlight.PDA" );
+	Text.Add( "csv:/text/location_finder" );
+}
+

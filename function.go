@@ -108,6 +108,13 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 	return resolvedCount
 }
 
+func (fd *FunctionDefinition) RenderPrototype(writer CodeWriter) {
+	// Write the function prototype
+	writer.Appendf("%s ", PROTOTYPE_PREFIX)
+	writer.Append(renderFunctionDefinitionHeader(fd.declaration))
+	writer.Append(";\n")
+}
+
 func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	if OUTPUT_ASSEMBLY {
@@ -255,7 +262,7 @@ func writeLocalVariableDeclarations(variables []Variable, writer CodeWriter) {
 	written := 0
 	for ii := 0; ii < len(variables); ii++ {
 		lv := &variables[ii]
-		if lv.setCount > 0 {
+		if lv.refCount > 0 {
 			writer.Appendf("%s %s;\n", lv.typeName, lv.variableName)
 			written++
 		}
@@ -294,19 +301,6 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 	sb.WriteString(")")
 
 	return sb.String()
-}
-
-func shouldRenderStatement(s *OpGraph) bool {
-	// Don't render weird string statements that show up at the end of functions
-	if s.operation.opcode == OP_POP_STACK && s.children[0].operation.opcode == OP_UNKNOWN_3B && s.children[0].children[0].operation.opcode == OP_VARIABLE_READ {
-		return false
-	}
-
-	// Don't render string init statements
-	if s.operation.opcode == OP_POP_STACK && s.children[0].operation.opcode == OP_VARIABLE_WRITE && s.children[0].children[0].operation.opcode == OP_HANDLE_INIT {
-		return false
-	}
-	return true
 }
 
 func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) (int, *FunctionDefinition) {

@@ -1,27 +1,4 @@
-//
-// (c) 2001 Particle Systems Ltd. All Rights Reserved
-//
-// package LocationFinder
-//
-// This package adds a Location Finder screen to the game.
-//
-// Written by Stephen Robertson
-// October 2001
-// 
-//
-// Revision control information:
-//
-// $Header: /iwar2/resource/scripts/src/mods/location_finder.pog 6     17/10/01 13:46 Steve $
-//
-
-
-// Package name ///////////////////////////////////////////////////////////////
-
 package LocationFinder;
-
-// Imports ////////////////////////////////////////////////////////////////////
-// these are the packages we're going to use
- 
 
 uses	Sim,
 		iAI,

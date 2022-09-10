@@ -9,7 +9,7 @@ type CodeWriter interface {
 	PushIndent()
 	PopIndent()
 	Append(s string)
-	Appendf(format string, a ...any)
+	Appendf(format string, a ...interface{})
 	String() string
 	Bytes() []byte
 }
@@ -37,7 +37,7 @@ func (cw *codeWriter) PopIndent() {
 
 func (cw *codeWriter) internalAppend(s string) {
 	cw.sb.WriteString(s)
-	fmt.Print(s)
+	//fmt.Print(s)
 	cw.last = s
 }
 
@@ -54,7 +54,7 @@ func (cw *codeWriter) Append(s string) {
 	cw.internalAppend(s)
 }
 
-func (cw *codeWriter) Appendf(format string, a ...any) {
+func (cw *codeWriter) Appendf(format string, a ...interface{}) {
 	cw.handleIndent()
 	cw.internalAppend(fmt.Sprintf(format, a...))
 }

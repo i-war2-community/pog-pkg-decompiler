@@ -184,7 +184,7 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_SCHEDULE_EVERY: {name: "OP_SCHEDULE_EVERY", dataSize: 12, parser: ParseScheduleEvery},
 
 	OP_ATOMIC_START: {name: "OP_ATOMIC_START", dataSize: 0, parser: ParseEmpty},
-	OP_ATOMIC_STOP:  {name: "OP_ATOMIC_STOP", dataSize: 0, parser: ParseEmpty},
+	OP_ATOMIC_STOP:  {name: "OP_ATOMIC_STOP", dataSize: 0, omit: true, parser: ParseEmpty},
 
 	OP_JUMP_IF_NOT_DEBUG: {name: "OP_JUMP_IF_NOT_DEBUG", dataSize: 4, parser: ParseJump},
 

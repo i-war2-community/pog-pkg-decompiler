@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
+	"strings"
 )
 
 // Command line options
@@ -31,17 +33,38 @@ type SectionHeader struct {
 	length     uint32
 }
 
+func sortPackageImports(imports []string) []string {
+	results := make([]string, len(imports))
+
+	copy(results, imports)
+
+	sort.Slice(results, func(a, b int) bool {
+		pkgA := PACKAGES[strings.ToLower(results[a])]
+		pkgB := PACKAGES[strings.ToLower(results[b])]
+
+		_, dependsBA := pkgB.dependencies[pkgA.name]
+		_, dependsAB := pkgA.dependencies[pkgB.name]
+
+		return dependsBA && !dependsAB
+	})
+
+	return results
+}
+
 func renderPackageImports(writer CodeWriter) {
 	importCount := len(PACKAGE_IMPORTS)
 	if importCount == 0 {
 		return
 	}
+
+	imports := sortPackageImports(PACKAGE_IMPORTS)
+
 	writer.Append("uses ")
 	for ii := 0; ii < importCount; ii++ {
 		if ii > 0 {
 			writer.Append("     ")
 		}
-		writer.Append(PACKAGE_IMPORTS[ii])
+		writer.Append(imports[ii])
 		if ii < importCount-1 {
 			writer.Append(",\n")
 		}
@@ -176,7 +199,8 @@ func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error
 				fmt.Printf("ERROR: Importing package '%s' not found in includes!", name)
 				os.Exit(1)
 			}
-			name = PACKAGES[name]
+			// Get the package name with the correct upper and lower case letters
+			name = PACKAGES[name].name
 
 			PACKAGE_IMPORTS = append(PACKAGE_IMPORTS, name)
 		}
@@ -200,7 +224,7 @@ func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error
 			fmt.Printf("ERROR: Exporting package '%s' not found in includes!", name)
 			os.Exit(1)
 		}
-		EXPORTING_PACKAGE = lookup
+		EXPORTING_PACKAGE = lookup.name
 
 	case "FEXP":
 		name, err := readString(file)
@@ -237,10 +261,6 @@ func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error
 		}
 
 	case "CODE":
-		writer.Appendf("package %s;\n\n", EXPORTING_PACKAGE)
-		renderPackageImports(writer)
-		renderFunctionExports(writer)
-
 		err = readCodeSection(file, writer)
 	}
 
@@ -393,6 +413,20 @@ func main() {
 
 	// Fix functions with unknown return types
 	SetAllUnknownFunctionReturnTypesToVoid()
+
+	// We need to detect the dependencies so we can reorder imports accordingly
+	DetectPackageDependencies()
+
+	writer.Appendf("package %s;\n\n", EXPORTING_PACKAGE)
+	renderPackageImports(writer)
+	renderFunctionExports(writer)
+
+	// Render the prototypes
+	for ii := range DECOMPILED_FUNCS {
+		DECOMPILED_FUNCS[ii].RenderPrototype(writer)
+	}
+
+	writer.Append("\n")
 
 	// Render the functions
 	for ii := range DECOMPILED_FUNCS {

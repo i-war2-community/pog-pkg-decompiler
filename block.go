@@ -32,6 +32,19 @@ func (og *OpGraph) String() string {
 	}
 }
 
+func (og *OpGraph) ShouldRender() bool {
+	// Don't render weird string statements that show up at the end of functions
+	if og.operation.opcode == OP_POP_STACK && og.children[0].operation.opcode == OP_UNKNOWN_3B && og.children[0].children[0].operation.opcode == OP_VARIABLE_READ {
+		return false
+	}
+
+	// Don't render string init statements
+	if og.operation.opcode == OP_POP_STACK && og.children[0].operation.opcode == OP_VARIABLE_WRITE && og.children[0].children[0].operation.opcode == OP_HANDLE_INIT {
+		return false
+	}
+	return true
+}
+
 func (og *OpGraph) GetVariableIndices() []uint32 {
 	result := []uint32{}
 
@@ -139,15 +152,16 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 	case OP_VARIABLE_READ:
 		varData := og.operation.data.(VariableReadData)
+		scope.variables[varData.index].refCount++
 		if scope.variables[varData.index].typeName != UNKNOWN_TYPE {
 			og.typeName = scope.variables[varData.index].typeName
 		}
 
 	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
 		varData := og.operation.data.(VariableWriteData)
-		// Add to the variable's set count if this isn't just from a handle init
+		// Add to the variable's ref count if this isn't just from a handle init
 		if og.children[0].operation.opcode != OP_HANDLE_INIT {
-			scope.variables[varData.index].setCount++
+			scope.variables[varData.index].refCount++
 		}
 
 		// Copy over the type of our first child
@@ -754,6 +768,10 @@ func isAtomicBlock(idx int, ops []Operation) int {
 				}
 			}
 		}
+
+		if lastAtomicStop == -1 {
+			fmt.Printf("Failed to deal with atomic block")
+		}
 	}
 	return lastAtomicStop
 }
@@ -837,7 +855,7 @@ func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 				fmt.Printf("ERROR: Unhandled jump at offset 0x%08X\n", op.offset)
 				os.Exit(1)
 			}
-		} else if len(stack) == 0 && shouldRenderStatement(node) {
+		} else if len(stack) == 0 && node.ShouldRender() {
 			statement = &Statement{
 				graph: node,
 			}
@@ -862,7 +880,7 @@ func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 				if jumpData.offset > endOp.offset && jumpData.offset != scope.functionEndOffset {
 					elseEndIdx := offsetToOpIndex(jumpData.offset, ops)
 					if elseEndIdx != -1 {
-						ops[blockEnd-1].opcode = OP_REMOVED
+						ops[blockEnd-1].Remove()
 						// Re-parse the operations excluding the jump at the end since it is for the else block
 						child.body = ParseOperations(scope, ops[idx+1:blockEnd])
 
@@ -885,7 +903,7 @@ func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 		blockEnd = isForOrWhileLoop(idx, ops)
 		if blockEnd != -1 {
 			// Clear out the jump at the end since it has served it's purpose
-			ops[blockEnd-1].opcode = OP_REMOVED
+			ops[blockEnd-1].Remove()
 
 			// See if there is a last element in our current block
 			var lastElement BlockElement = nil
@@ -978,7 +996,6 @@ func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 		// Check for atomic block
 		blockEnd = isAtomicBlock(idx, ops)
 		if blockEnd != -1 {
-			ops[blockEnd].opcode = OP_REMOVED
 
 			child := &AtomicBlock{
 				body: ParseOperations(scope, ops[idx+1:blockEnd+1]),
@@ -994,7 +1011,7 @@ func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 		blockEnd = isScheduleBlock(idx, ops)
 		if blockEnd != -1 {
 			// Remove the looping jump at the end
-			ops[blockEnd].opcode = OP_REMOVED
+			ops[blockEnd].Remove()
 
 			schedule := &ScheduleBlock{
 				body: []BlockElement{},
