@@ -27,8 +27,8 @@ const (
 	OP_POP_STACK_N byte = 0x02
 	OP_CLONE_STACK byte = 0x03
 
-	OP_LITERAL_FALSE byte = 0x04
-	OP_LITERAL_TRUE  byte = 0x05
+	OP_LITERAL_ZERO  byte = 0x04
+	OP_LITERAL_ONE   byte = 0x05
 	OP_LITERAL_BYTE  byte = 0x06
 	OP_LITERAL_SHORT byte = 0x07
 	OP_LITERAL_INT   byte = 0x08
@@ -111,8 +111,8 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_POP_STACK_N: {name: "OP_POP_STACK_N", dataSize: 1, parser: ParseCountUInt8},
 	OP_CLONE_STACK: {name: "OP_CLONE_STACK", dataSize: 0},
 
-	OP_LITERAL_FALSE: {name: "OP_LITERAL_FALSE", dataSize: 0, parser: ParseLiteralBool},
-	OP_LITERAL_TRUE:  {name: "OP_LITERAL_TRUE", dataSize: 0, parser: ParseLiteralBool},
+	OP_LITERAL_ZERO:  {name: "OP_LITERAL_ZERO", dataSize: 0, parser: ParseLiteralBool},
+	OP_LITERAL_ONE:   {name: "OP_LITERAL_ONE", dataSize: 0, parser: ParseLiteralBool},
 	OP_LITERAL_BYTE:  {name: "OP_LITERAL_BYTE", dataSize: 1, parser: ParseLiteralByte},
 	OP_LITERAL_SHORT: {name: "OP_LITERAL_SHORT", dataSize: 2, parser: ParseLiteralShort},
 	OP_LITERAL_INT:   {name: "OP_LITERAL_INT", dataSize: 4, parser: ParseLiteralInt},
@@ -520,7 +520,7 @@ func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
 			params := make([]FunctionParameter, parameterCount)
 			for ii := 0; ii < len(params); ii++ {
 				p := &params[ii]
-				p.typeName = "UNKNOWN"
+				p.typeName = UNKNOWN_TYPE
 				p.parameterName = fmt.Sprintf("param_%d", ii)
 			}
 			declaration.parameters = &params
@@ -547,7 +547,7 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 			params := make([]FunctionParameter, parameterCount)
 			for ii := 0; ii < len(params); ii++ {
 				p := &params[ii]
-				p.typeName = "UNKNOWN"
+				p.typeName = UNKNOWN_TYPE
 				p.parameterName = fmt.Sprintf("param_%d", ii)
 			}
 			declaration.parameters = &params

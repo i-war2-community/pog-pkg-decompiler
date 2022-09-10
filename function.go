@@ -6,33 +6,139 @@ import (
 	"strings"
 )
 
+const PROTOTYPE_PREFIX = "prototype"
+
 type FunctionParameter struct {
 	typeName      string
 	parameterName string
 }
 
 type FunctionDeclaration struct {
-	pkg            string
-	name           string
-	returnTypeName string
-	parameters     *[]FunctionParameter
+	pkg                 string
+	name                string
+	returnTypeName      string
+	parameters          *[]FunctionParameter
+	possibleReturnTypes map[string]bool
 }
 
-const PROTOTYPE_PREFIX = "prototype"
-
 var FUNC_DECLARATIONS map[string]*FunctionDeclaration = map[string]*FunctionDeclaration{}
+
+type FunctionDefinition struct {
+	declaration *FunctionDeclaration
+	scope       *Scope
+	body        []BlockElement
+
+	startingIndex int
+	initialOffset int64
+}
+
+func (fd *FunctionDefinition) ResolveTypes() int {
+	resolvedCount := 0
+
+	// Resolve variable types
+	ResolveTypes(fd.scope, fd.body)
+
+	for idx := range fd.scope.variables {
+		v := &fd.scope.variables[idx]
+		if v.typeName == UNKNOWN_TYPE {
+			if len(v.possibleTypes) == 1 {
+				for key := range v.possibleTypes {
+					v.typeName = key
+					resolvedCount++
+					break
+				}
+			} else if len(v.possibleTypes) > 1 {
+
+				// Check for int and bool being the possible types
+				if len(v.possibleTypes) == 2 {
+					_, okInt := v.possibleTypes["int"]
+					_, okBool := v.possibleTypes["bool"]
+					if okInt && okBool {
+						v.typeName = "int"
+						resolvedCount++
+						continue
+					}
+				}
+
+				// If we have handle types, find the most concrete one
+				baseType := "hobject"
+				derivedType := ""
+
+				for typeName := range v.possibleTypes {
+					// If this
+					if HandleIsDerivedFrom(typeName, baseType) {
+						derivedType = typeName
+						baseType = typeName
+					} else if HandleIsDerivedFrom(baseType, typeName) {
+						derivedType = baseType
+					} else {
+						derivedType = UNKNOWN_TYPE
+						break
+					}
+				}
+				if derivedType != UNKNOWN_TYPE {
+					v.typeName = derivedType
+					resolvedCount++
+				}
+			}
+		}
+
+		// Copy over parameter types from their respective scope variable to the function declaration
+		if idx < int(fd.scope.localVariableIndexOffset) && v.typeName != UNKNOWN_TYPE {
+			param := &(*fd.declaration.parameters)[idx]
+			if param.typeName == UNKNOWN_TYPE {
+				param.typeName = v.typeName
+			}
+		}
+	}
+
+	// See if we can resolve the return type
+	if fd.declaration.returnTypeName == UNKNOWN_TYPE {
+		if len(fd.declaration.possibleReturnTypes) == 1 {
+			for key := range fd.declaration.possibleReturnTypes {
+				fd.declaration.returnTypeName = key
+				resolvedCount++
+				break
+			}
+		} else if len(fd.declaration.possibleReturnTypes) > 1 {
+			fmt.Print("Too many possible return types")
+		}
+	}
+
+	return resolvedCount
+}
+
+func (fd *FunctionDefinition) Render(writer CodeWriter) {
+
+	if OUTPUT_ASSEMBLY {
+		PrintFunctionAssembly(fd.declaration, fd.startingIndex, fd.initialOffset, writer)
+	}
+
+	// Write the function header
+	writer.Append(renderFunctionDefinitionHeader(fd.declaration))
+	writer.Append("\n{\n")
+	writer.PushIndent()
+
+	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], writer)
+
+	RenderBlockElements(fd.body, writer)
+
+	writer.PopIndent()
+	writer.Append("}\n\n")
+}
 
 func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 	result := new(FunctionDeclaration)
 	result.pkg = pkg
 	result.name = name
+	result.possibleReturnTypes = map[string]bool{}
 
 	// Check to see if we have this one already
 	if existing, ok := FUNC_DECLARATIONS[result.GetScopedName()]; ok {
 		return existing
 	}
 
-	result.returnTypeName = "UNKNOWN"
+	result.returnTypeName = UNKNOWN_TYPE
 
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
@@ -121,8 +227,20 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 		result.returnTypeName = "htask"
 	}
 
+	result.possibleReturnTypes = map[string]bool{}
+
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
+}
+
+func SetAllUnknownFunctionReturnTypesToVoid() {
+	for idx := range FUNC_DECLARATIONS {
+		f := FUNC_DECLARATIONS[idx]
+
+		if f.returnTypeName == UNKNOWN_TYPE {
+			f.returnTypeName = ""
+		}
+	}
 }
 
 func (f *FunctionDeclaration) GetScopedName() string {
@@ -161,7 +279,7 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 
 	sb.WriteString(declaration.name)
 	sb.WriteString("(")
-	if declaration.parameters != nil {
+	if declaration.parameters != nil && len(*declaration.parameters) > 0 {
 		sb.WriteString(" ")
 		count := len(*declaration.parameters)
 		for ii := 0; ii < count; ii++ {
@@ -191,17 +309,16 @@ func shouldRenderStatement(s *OpGraph) bool {
 	return true
 }
 
-func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) int {
-	if OUTPUT_ASSEMBLY {
-		PrintFunctionAssembly(declaration, startingIndex, initialOffset, writer)
+func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) (int, *FunctionDefinition) {
+	definition := &FunctionDefinition{
+		startingIndex: startingIndex,
+		initialOffset: initialOffset,
+		declaration:   declaration,
+		scope: &Scope{
+			function:  declaration,
+			variables: []Variable{},
+		},
 	}
-	scope := Scope{
-		function:  declaration,
-		variables: []Variable{},
-	}
-	//writer.Appendf(renderFunctionDefinitionHeader(declaration))
-	//writer.Appendf("\n{\n")
-	//writer.PushIndent()
 
 	// Add the parameters from our function declaration to the scope variables
 	if declaration.parameters != nil {
@@ -213,10 +330,10 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 				stackIndex:    uint32(ii),
 				possibleTypes: map[string]bool{},
 			}
-			scope.variables = append(scope.variables, v)
+			definition.scope.variables = append(definition.scope.variables, v)
 		}
 
-		scope.localVariableIndexOffset = uint32(len(*declaration.parameters))
+		definition.scope.localVariableIndexOffset = uint32(len(*declaration.parameters))
 	}
 
 	// Check to see if there are local variables
@@ -226,12 +343,12 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		var ii uint32
 		for ii = 0; ii < count; ii++ {
 			lv := Variable{
-				typeName:      "UNKNOWN",
+				typeName:      UNKNOWN_TYPE,
 				variableName:  fmt.Sprintf("local_%d", ii),
-				stackIndex:    uint32(ii + scope.localVariableIndexOffset),
+				stackIndex:    uint32(ii + definition.scope.localVariableIndexOffset),
 				possibleTypes: map[string]bool{},
 			}
-			scope.variables = append(scope.variables, lv)
+			definition.scope.variables = append(definition.scope.variables, lv)
 		}
 		// Skip over the local variable opcode
 		startingIndex++
@@ -245,7 +362,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		if OPERATIONS[idx].opcode == OP_FUNCTION_END {
 			idx--
 
-			if len(declaration.returnTypeName) == 0 && OPERATIONS[idx].opcode == OP_UNKNOWN_3C && OPERATIONS[idx-1].opcode == OP_LITERAL_FALSE {
+			if len(declaration.returnTypeName) == 0 && OPERATIONS[idx].opcode == OP_UNKNOWN_3C && OPERATIONS[idx-1].opcode == OP_LITERAL_ZERO {
 				idx--
 			}
 
@@ -280,69 +397,12 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	}
 
 	// Save off the end offset so we can detect return statements
-	scope.functionEndOffset = functionEnd.offset
+	definition.scope.functionEndOffset = functionEnd.offset
 
 	blockOps := OPERATIONS[startingIndex:endIdx]
-	body := ParseOperations(scope, blockOps)
+	definition.body = ParseOperations(definition.scope, blockOps)
 
-	// Resolve variable types
-	ResolveTypes(scope, body)
-
-	for idx := range scope.variables {
-		v := &scope.variables[idx]
-		if v.typeName == "UNKNOWN" {
-			if len(v.possibleTypes) == 1 {
-				for key := range v.possibleTypes {
-					v.typeName = key
-					break
-				}
-			} else if len(v.possibleTypes) > 1 {
-				// If we have handle types, find the most concrete one
-				baseType := "hobject"
-				derivedType := ""
-
-				for typeName := range v.possibleTypes {
-					// If this
-					if HandleIsDerivedFrom(typeName, baseType) {
-						derivedType = typeName
-						baseType = typeName
-					} else if HandleIsDerivedFrom(baseType, typeName) {
-						derivedType = baseType
-					} else {
-						v.typeName = "UNKNOWN"
-						break
-					}
-				}
-
-				v.typeName = derivedType
-			}
-		}
-
-		// If we have a type for this variable, copy it over to the function declaration
-		if idx < int(scope.localVariableIndexOffset) && v.typeName != "UNKNOWN" {
-			param := &(*declaration.parameters)[idx]
-			if param.typeName == "UNKNOWN" {
-				param.typeName = v.typeName
-			}
-		}
-	}
-
-	// Resolve variable types
-	ResolveTypes(scope, body)
-
-	// Write the function header
-	writer.Append(renderFunctionDefinitionHeader(declaration))
-	writer.Append("\n{\n")
-	writer.PushIndent()
-
-	writeLocalVariableDeclarations(scope.variables[scope.localVariableIndexOffset:], writer)
-
-	RenderBlockElements(body, writer)
-
-	writer.PopIndent()
-	writer.Append("}\n\n")
-
-	return endIdx
+	return endIdx, definition
 }
 
 func PrintFunctionAssembly(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) {

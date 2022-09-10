@@ -1,8 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type Operation struct {
@@ -28,7 +28,7 @@ func IsFunctionCall(operation *Operation) bool {
 	return false
 }
 
-func RenderOperationCode(operation *Operation, scope Scope) *string {
+func RenderOperationCode(operation *Operation, scope *Scope) *string {
 	var result string
 	switch operation.opcode {
 	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
@@ -41,10 +41,10 @@ func RenderOperationCode(operation *Operation, scope Scope) *string {
 		v := scope.GetVariableByStackIndex(readData.index)
 		result = fmt.Sprint(v.variableName)
 
-	case OP_LITERAL_TRUE:
+	case OP_LITERAL_ONE:
 		result = "1"
 
-	case OP_LITERAL_FALSE:
+	case OP_LITERAL_ZERO:
 		result = "0"
 
 	case OP_LITERAL_BYTE:
@@ -66,8 +66,9 @@ func RenderOperationCode(operation *Operation, scope Scope) *string {
 	case OP_LITERAL_STRING:
 		data := operation.data.(LiteralStringData)
 		// TODO: This seems like an area that could cause a lot of trouble
-		s, _ := json.Marshal(STRING_TABLE[data.index])
-		result = string(s)
+		s := strings.ReplaceAll(STRING_TABLE[data.index], "\n", `\n`)
+		s = strings.ReplaceAll(s, "\t", `\t`)
+		result = fmt.Sprintf(`"%s"`, s)
 
 	case OP_FUNCTION_CALL_LOCAL:
 		data := operation.data.(FunctionCallData)

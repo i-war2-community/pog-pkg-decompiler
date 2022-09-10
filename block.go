@@ -3,14 +3,17 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/juliangruber/go-intersect"
 )
 
+const UNKNOWN_TYPE = "UNKNOWN"
+
 type BlockElement interface {
 	Render(writer CodeWriter)
 	IsBlock() bool
-	ResolveTypes(scope Scope)
+	ResolveTypes(scope *Scope)
 }
 
 type OpGraph struct {
@@ -71,7 +74,7 @@ func (og *OpGraph) GetOffsetRange() (uint32, uint32) {
 	return min, max
 }
 
-func (og *OpGraph) ResolveTypes(scope Scope) {
+func (og *OpGraph) ResolveTypes(scope *Scope) {
 	for idx := range og.children {
 		og.children[idx].ResolveTypes(scope)
 	}
@@ -88,7 +91,7 @@ func (og *OpGraph) ResolveTypes(scope Scope) {
 
 	case OP_FUNCTION_CALL_IMPORTED, OP_TASK_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_LOCAL:
 		funcData := og.operation.data.(FunctionCallData)
-		if funcData.declaration.returnTypeName != "UNKNOWN" {
+		if funcData.declaration.returnTypeName != UNKNOWN_TYPE {
 			og.typeName = funcData.declaration.returnTypeName
 		}
 
@@ -97,18 +100,18 @@ func (og *OpGraph) ResolveTypes(scope Scope) {
 				param := &(*funcData.declaration.parameters)[ii]
 				child := og.children[len(og.children)-1-ii]
 
-				if param.typeName == "UNKNOWN" {
+				if param.typeName == UNKNOWN_TYPE {
 					continue
 				}
 
 				switch child.operation.opcode {
-				case OP_LITERAL_FALSE:
+				case OP_LITERAL_ZERO:
 					if param.typeName == "bool" {
 						boolCode := "false"
 						child.code = &boolCode
 					}
 
-				case OP_LITERAL_TRUE:
+				case OP_LITERAL_ONE:
 					if param.typeName == "bool" {
 						boolCode := "true"
 						child.code = &boolCode
@@ -136,7 +139,7 @@ func (og *OpGraph) ResolveTypes(scope Scope) {
 
 	case OP_VARIABLE_READ:
 		varData := og.operation.data.(VariableReadData)
-		if scope.variables[varData.index].typeName != "UNKNOWN" {
+		if scope.variables[varData.index].typeName != UNKNOWN_TYPE {
 			og.typeName = scope.variables[varData.index].typeName
 		}
 
@@ -148,9 +151,46 @@ func (og *OpGraph) ResolveTypes(scope Scope) {
 		}
 
 		// Copy over the type of our first child
-		og.typeName = og.children[0].typeName
-		if og.typeName != "UNKNOWN" {
+		childType := og.children[0].typeName
+
+		switch og.children[0].operation.opcode {
+		case OP_LITERAL_ZERO, OP_LITERAL_ONE:
+			childType = "bool"
+			// If we are assigning literal true or literal false
+			if scope.variables[varData.index].typeName == "bool" {
+				boolStr := "false"
+				if og.children[0].operation.opcode == OP_LITERAL_ONE {
+					boolStr = "true"
+				}
+
+				og.children[0].code = &boolStr
+			}
+		}
+
+		og.typeName = childType
+		if og.typeName != UNKNOWN_TYPE {
 			scope.variables[varData.index].possibleTypes[og.typeName] = true
+		}
+
+	case OP_JUMP:
+		if og.code != nil && strings.HasPrefix(*og.code, "return") {
+			if scope.function.returnTypeName == UNKNOWN_TYPE {
+				returnType := ""
+				if len(og.children) > 0 {
+					returnType = og.children[0].typeName
+				}
+				if returnType != UNKNOWN_TYPE {
+					scope.function.possibleReturnTypes[returnType] = true
+				}
+			}
+		}
+
+	case OP_JUMP_IF_FALSE, OP_JUMP_IF_TRUE:
+		// If we have a variable read inside an if statement, we might have a bool
+		if len(og.children) == 1 && og.children[0].operation.opcode == OP_VARIABLE_READ {
+			child := og.children[0]
+			varData := child.operation.data.(VariableReadData)
+			scope.variables[varData.index].possibleTypes["bool"] = true
 		}
 
 	default:
@@ -223,7 +263,7 @@ func (s *Statement) IsBlock() bool {
 	return false
 }
 
-func (s *Statement) ResolveTypes(scope Scope) {
+func (s *Statement) ResolveTypes(scope *Scope) {
 	s.graph.ResolveTypes(scope)
 }
 
@@ -290,7 +330,7 @@ func (ib *IfBlock) IsBlock() bool {
 	return true
 }
 
-func (ib *IfBlock) ResolveTypes(scope Scope) {
+func (ib *IfBlock) ResolveTypes(scope *Scope) {
 	ib.conditional.ResolveTypes(scope)
 	ResolveTypes(scope, ib.body)
 }
@@ -338,7 +378,7 @@ func (eb *ElseBlock) IsBlock() bool {
 	return true
 }
 
-func (eb *ElseBlock) ResolveTypes(scope Scope) {
+func (eb *ElseBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, eb.body)
 }
 
@@ -370,7 +410,7 @@ func (db *DebugBlock) IsBlock() bool {
 	return true
 }
 
-func (db *DebugBlock) ResolveTypes(scope Scope) {
+func (db *DebugBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
 }
 
@@ -397,7 +437,7 @@ func (db *AtomicBlock) IsBlock() bool {
 	return true
 }
 
-func (db *AtomicBlock) ResolveTypes(scope Scope) {
+func (db *AtomicBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
 }
 
@@ -424,7 +464,7 @@ func (db *ScheduleBlock) IsBlock() bool {
 	return true
 }
 
-func (db *ScheduleBlock) ResolveTypes(scope Scope) {
+func (db *ScheduleBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
 }
 
@@ -452,7 +492,7 @@ func (db *ScheduleEveryBlock) IsBlock() bool {
 	return true
 }
 
-func (db *ScheduleEveryBlock) ResolveTypes(scope Scope) {
+func (db *ScheduleEveryBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
 }
 
@@ -481,7 +521,7 @@ func (wl *WhileLoop) IsBlock() bool {
 	return true
 }
 
-func (wl *WhileLoop) ResolveTypes(scope Scope) {
+func (wl *WhileLoop) ResolveTypes(scope *Scope) {
 	wl.conditional.ResolveTypes(scope)
 	ResolveTypes(scope, wl.body)
 }
@@ -512,7 +552,7 @@ func (wl *DoWhileLoop) IsBlock() bool {
 	return true
 }
 
-func (wl *DoWhileLoop) ResolveTypes(scope Scope) {
+func (wl *DoWhileLoop) ResolveTypes(scope *Scope) {
 	wl.conditional.ResolveTypes(scope)
 	ResolveTypes(scope, wl.body)
 }
@@ -548,7 +588,7 @@ func (fl *ForLoop) IsBlock() bool {
 	return true
 }
 
-func (fl *ForLoop) ResolveTypes(scope Scope) {
+func (fl *ForLoop) ResolveTypes(scope *Scope) {
 	fl.init.ResolveTypes(scope)
 	fl.conditional.ResolveTypes(scope)
 	fl.increment.ResolveTypes(scope)
@@ -658,7 +698,11 @@ func isDebugBlock(idx int, ops []Operation) int {
 
 	if op.opcode == OP_JUMP_IF_NOT_DEBUG {
 		jumpData := op.data.(JumpData)
-		return offsetToOpIndex(jumpData.offset, ops)
+		result := offsetToOpIndex(jumpData.offset, ops)
+		if result == -1 {
+			fmt.Printf("Failed to deal with debug block")
+		}
+		return result
 	}
 
 	return -1
@@ -714,7 +758,7 @@ func isAtomicBlock(idx int, ops []Operation) int {
 	return lastAtomicStop
 }
 
-func ParseOperations(scope Scope, ops []Operation) []BlockElement {
+func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 	elements := []BlockElement{}
 
 	// Create the stack
@@ -732,13 +776,13 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 
 		// Create a node for this operation
 		node := new(OpGraph)
-		node.typeName = "UNKNOWN"
+		node.typeName = UNKNOWN_TYPE
 		node.operation = op
 		node.code = RenderOperationCode(op, scope)
 
 		if op.data.PopCount() > 0 {
 			if op.data.PopCount() > len(stack) {
-				fmt.Printf("WARN: Stack underflow at 0x%08X\n", op.offset)
+				//fmt.Printf("WARN: Stack underflow at 0x%08X\n", op.offset)
 				//os.Exit(2)
 				continue
 			}
@@ -818,8 +862,9 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 				if jumpData.offset > endOp.offset && jumpData.offset != scope.functionEndOffset {
 					elseEndIdx := offsetToOpIndex(jumpData.offset, ops)
 					if elseEndIdx != -1 {
+						ops[blockEnd-1].opcode = OP_REMOVED
 						// Re-parse the operations excluding the jump at the end since it is for the else block
-						child.body = ParseOperations(scope, ops[idx+1:blockEnd-1])
+						child.body = ParseOperations(scope, ops[idx+1:blockEnd])
 
 						elseChild := &ElseBlock{
 							body: ParseOperations(scope, ops[blockEnd:elseEndIdx+1]),
@@ -933,8 +978,10 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 		// Check for atomic block
 		blockEnd = isAtomicBlock(idx, ops)
 		if blockEnd != -1 {
+			ops[blockEnd].opcode = OP_REMOVED
+
 			child := &AtomicBlock{
-				body: ParseOperations(scope, ops[idx+1:blockEnd]),
+				body: ParseOperations(scope, ops[idx+1:blockEnd+1]),
 			}
 
 			elements = append(elements, child)
@@ -988,7 +1035,7 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 	return elements
 }
 
-func ResolveTypes(scope Scope, elements []BlockElement) {
+func ResolveTypes(scope *Scope, elements []BlockElement) {
 	for idx := range elements {
 		elements[idx].ResolveTypes(scope)
 	}

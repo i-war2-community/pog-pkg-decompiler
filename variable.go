@@ -19,7 +19,7 @@ type Scope struct {
 	localVariableIndexOffset uint32
 }
 
-func (s Scope) GetVariableByStackIndex(stackIndex uint32) *Variable {
+func (s *Scope) GetVariableByStackIndex(stackIndex uint32) *Variable {
 	for ii := 0; ii < len(s.variables); ii++ {
 		lv := &s.variables[ii]
 		if lv.stackIndex == stackIndex {

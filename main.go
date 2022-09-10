@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"os"
 )
 
@@ -16,6 +17,8 @@ var IMPORTING_PACKAGE string
 
 var FUNC_EXPORTS []*FunctionDeclaration = []*FunctionDeclaration{}
 var PACKAGE_IMPORTS []string = []string{}
+
+var DECOMPILED_FUNCS []*FunctionDefinition = []*FunctionDefinition{}
 
 var FUNC_DEFINITION_MAP map[uint32]*FunctionDeclaration = map[uint32]*FunctionDeclaration{}
 var FUNC_IMPORT_MAP map[uint32]*FunctionDeclaration = map[uint32]*FunctionDeclaration{}
@@ -312,17 +315,16 @@ func readCodeSection(file *os.File, writer CodeWriter) error {
 		OPERATIONS = append(OPERATIONS, *operation)
 	}
 
-	// TEMPORARY OUTPUT
 	for idx := 0; idx < len(OPERATIONS); idx++ {
 		operation := OPERATIONS[idx]
 		declaration := FUNC_DEFINITION_MAP[operation.offset]
 
 		if declaration != nil {
-			idx = DecompileFunction(declaration, idx, initialOffset, writer)
+			var def *FunctionDefinition
+			idx, def = DecompileFunction(declaration, idx, initialOffset, writer)
+			DECOMPILED_FUNCS = append(DECOMPILED_FUNCS, def)
 		}
 	}
-
-	fmt.Print(writer.String())
 
 	return nil
 }
@@ -377,4 +379,35 @@ func main() {
 		fmt.Printf("Error: Failed to read file: %v", err)
 		return
 	}
+
+	// Resolve types until no more are resolved
+	for {
+		resolveCount := 0
+		for ii := range DECOMPILED_FUNCS {
+			resolveCount += DECOMPILED_FUNCS[ii].ResolveTypes()
+		}
+		if resolveCount == 0 {
+			break
+		}
+	}
+
+	// Fix functions with unknown return types
+	SetAllUnknownFunctionReturnTypesToVoid()
+
+	// Render the functions
+	for ii := range DECOMPILED_FUNCS {
+		DECOMPILED_FUNCS[ii].Render(writer)
+	}
+
+	output := fmt.Sprintf("%s.d.pog", filename)
+
+	results := writer.Bytes()
+
+	err = ioutil.WriteFile(output, results, 0644)
+	if err != nil {
+		fmt.Printf("Error: Failed to write file: %v", err)
+		return
+	}
+	fmt.Print(writer.String())
+
 }
