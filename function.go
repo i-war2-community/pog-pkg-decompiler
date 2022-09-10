@@ -162,6 +162,7 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 	sb.WriteString(declaration.name)
 	sb.WriteString("(")
 	if declaration.parameters != nil {
+		sb.WriteString(" ")
 		count := len(*declaration.parameters)
 		for ii := 0; ii < count; ii++ {
 			p := (*declaration.parameters)[ii]
@@ -170,6 +171,7 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 				sb.WriteString(", ")
 			}
 		}
+		sb.WriteString(" ")
 	}
 	sb.WriteString(")")
 
@@ -313,6 +315,14 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 				}
 
 				v.typeName = derivedType
+			}
+		}
+
+		// If we have a type for this variable, copy it over to the function declaration
+		if idx < int(scope.localVariableIndexOffset) && v.typeName != "UNKNOWN" {
+			param := &(*declaration.parameters)[idx]
+			if param.typeName == "UNKNOWN" {
+				param.typeName = v.typeName
 			}
 		}
 	}
