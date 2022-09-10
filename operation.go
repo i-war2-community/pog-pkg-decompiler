@@ -31,7 +31,7 @@ func IsFunctionCall(operation *Operation) bool {
 func RenderOperationCode(operation *Operation, scope Scope) *string {
 	var result string
 	switch operation.opcode {
-	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
+	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
 		writeData := operation.data.(VariableWriteData)
 		v := scope.GetVariableByStackIndex(writeData.index)
 		result = fmt.Sprintf("%s = ", v.variableName)
@@ -70,20 +70,16 @@ func RenderOperationCode(operation *Operation, scope Scope) *string {
 		result = string(s)
 
 	case OP_FUNCTION_CALL_LOCAL:
-		data := operation.data.(FunctionCallLocalData)
+		data := operation.data.(FunctionCallData)
 		result = data.declaration.name
 
 	case OP_FUNCTION_CALL_IMPORTED:
-		data := operation.data.(FunctionCallImportedData)
+		data := operation.data.(FunctionCallData)
 		result = data.declaration.GetScopedName()
 
-	case OP_TASK_CALL_LOCAL:
-		data := operation.data.(FunctionCallLocalData)
+	case OP_TASK_CALL_LOCAL, OP_TASK_CALL_IMPORTED:
+		data := operation.data.(FunctionCallData)
 		result = fmt.Sprintf("start %s", data.declaration.name)
-
-	case OP_TASK_CALL_IMPORTED:
-		data := operation.data.(FunctionCallImportedData)
-		result = fmt.Sprintf("start %s", data.declaration.GetScopedName())
 
 	case OP_INT_EQUALS, OP_STRING_EQUALS:
 		result = "=="

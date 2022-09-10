@@ -35,9 +35,12 @@ func renderPackageImports(writer CodeWriter) {
 	}
 	writer.Append("uses ")
 	for ii := 0; ii < importCount; ii++ {
+		if ii > 0 {
+			writer.Append("     ")
+		}
 		writer.Append(PACKAGE_IMPORTS[ii])
 		if ii < importCount-1 {
-			writer.Append(", ")
+			writer.Append(",\n")
 		}
 	}
 	writer.Append(";\n\n")
@@ -50,9 +53,12 @@ func renderFunctionExports(writer CodeWriter) {
 	}
 	writer.Append("provides ")
 	for ii := 0; ii < exportCount; ii++ {
+		if ii > 0 {
+			writer.Append("         ")
+		}
 		writer.Append(FUNC_EXPORTS[ii].name)
 		if ii < exportCount-1 {
-			writer.Append(", ")
+			writer.Append(",\n")
 		}
 	}
 	writer.Append(";\n\n")

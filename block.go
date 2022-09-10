@@ -10,12 +10,14 @@ import (
 type BlockElement interface {
 	Render(writer CodeWriter)
 	IsBlock() bool
+	ResolveTypes(scope Scope)
 }
 
 type OpGraph struct {
 	code      *string
 	operation *Operation
 	children  []*OpGraph
+	typeName  string
 }
 
 func (og *OpGraph) GetVariableIndices() []uint32 {
@@ -27,7 +29,7 @@ func (og *OpGraph) GetVariableIndices() []uint32 {
 		data := og.operation.data.(VariableReadData)
 		result = append(result, data.index)
 
-	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
+	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
 		data := og.operation.data.(VariableWriteData)
 		result = append(result, data.index)
 	}
@@ -39,6 +41,114 @@ func (og *OpGraph) GetVariableIndices() []uint32 {
 	}
 
 	return result
+}
+
+func (og *OpGraph) GetOffsetRange() (uint32, uint32) {
+	var min uint32 = og.operation.offset
+	var max uint32 = og.operation.offset
+
+	// Check our children
+	for _, child := range og.children {
+		childMin, childMax := child.GetOffsetRange()
+
+		if childMin < min {
+			min = childMin
+		}
+		if childMax > max {
+			max = childMax
+		}
+	}
+
+	return min, max
+}
+
+func (og *OpGraph) ResolveTypes(scope Scope) {
+	for idx := range og.children {
+		og.children[idx].ResolveTypes(scope)
+	}
+
+	switch og.operation.opcode {
+	case OP_INT_ADD, OP_INT_SUB, OP_INT_MUL, OP_INT_DIV, OP_INT_MOD, OP_CAST_FLT_TO_INT, OP_BITWISE_AND, OP_BITWISE_OR, OP_INT_NEG, OP_LITERAL_BYTE, OP_LITERAL_SHORT, OP_LITERAL_INT:
+		og.typeName = "int"
+
+	case OP_FLT_ADD, OP_FLT_SUB, OP_FLT_MUL, OP_FLT_DIV, OP_CAST_INT_TO_FLT, OP_FLT_NEG, OP_LITERAL_FLT:
+		og.typeName = "float"
+
+	case OP_LITERAL_STRING:
+		og.typeName = "string"
+
+	case OP_FUNCTION_CALL_IMPORTED, OP_TASK_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_LOCAL:
+		funcData := og.operation.data.(FunctionCallData)
+		if funcData.declaration.returnTypeName != "UNKNOWN" {
+			og.typeName = funcData.declaration.returnTypeName
+		}
+
+		if funcData.declaration.parameters != nil && len(*funcData.declaration.parameters) == len(og.children) {
+			for ii := range *funcData.declaration.parameters {
+				param := &(*funcData.declaration.parameters)[ii]
+				child := og.children[len(og.children)-1-ii]
+
+				if param.typeName == "UNKNOWN" {
+					continue
+				}
+
+				switch child.operation.opcode {
+				case OP_LITERAL_FALSE:
+					if param.typeName == "bool" {
+						boolCode := "false"
+						child.code = &boolCode
+					}
+
+				case OP_LITERAL_TRUE:
+					if param.typeName == "bool" {
+						boolCode := "true"
+						child.code = &boolCode
+					}
+
+				case OP_VARIABLE_READ:
+					child.typeName = param.typeName
+					varData := child.operation.data.(VariableReadData)
+					scope.variables[varData.index].possibleTypes[param.typeName] = true
+				}
+			}
+		}
+
+	case OP_LOGICAL_AND, OP_LOGICAL_OR, OP_LOGICAL_NOT:
+		og.typeName = "bool"
+
+	case OP_INT_EQUALS, OP_INT_NOT_EQUALS, OP_INT_GT, OP_INT_LT, OP_INT_GT_EQUALS, OP_INT_LT_EQUALS:
+		og.typeName = "bool"
+
+	case OP_FLT_GT, OP_FLT_LT, OP_FLT_GT_EQUALS, OP_FLT_LT_EQUALS:
+		og.typeName = "bool"
+
+	case OP_STRING_EQUALS:
+		og.typeName = "bool"
+
+	case OP_VARIABLE_READ:
+		varData := og.operation.data.(VariableReadData)
+		if scope.variables[varData.index].typeName != "UNKNOWN" {
+			og.typeName = scope.variables[varData.index].typeName
+		}
+
+	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+		varData := og.operation.data.(VariableWriteData)
+		// Add to the variable's set count if this isn't just from a handle init
+		if og.children[0].operation.opcode != OP_HANDLE_INIT {
+			scope.variables[varData.index].setCount++
+		}
+
+		// Copy over the type of our first child
+		og.typeName = og.children[0].typeName
+		if og.typeName != "UNKNOWN" {
+			scope.variables[varData.index].possibleTypes[og.typeName] = true
+		}
+
+	default:
+		if len(og.children) > 0 {
+			og.typeName = og.children[0].typeName
+		}
+	}
 }
 
 func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
@@ -76,11 +186,17 @@ func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
 
 	if IsFunctionCall(node.operation) {
 		writer.Append("(")
+		if len(node.children) > 0 {
+			writer.Append(" ")
+		}
 		for ii := len(node.children) - 1; ii >= 0; ii-- {
 			printGraphNode(node.children[ii], writer, true)
 			if ii > 0 {
 				writer.Append(", ")
 			}
+		}
+		if len(node.children) > 0 {
+			writer.Append(" ")
 		}
 		writer.Append(")")
 	}
@@ -96,6 +212,10 @@ func (s *Statement) Render(writer CodeWriter) {
 
 func (s *Statement) IsBlock() bool {
 	return false
+}
+
+func (s *Statement) ResolveTypes(scope Scope) {
+	s.graph.ResolveTypes(scope)
 }
 
 func shouldHaveNewlineBetween(element1 BlockElement, element2 BlockElement) bool {
@@ -116,7 +236,18 @@ func RenderBlockElements(elements []BlockElement, writer CodeWriter) {
 		e := elements[idx]
 		e.Render(writer)
 		if !e.IsBlock() {
-			writer.Append(";\n")
+			if OUTPUT_ASSEMBLY {
+				writer.Append("; ")
+				s := e.(*Statement)
+				min, max := s.graph.GetOffsetRange()
+				if min != max {
+					writer.Appendf("// 0x%08X - 0x%08X\n", min, max)
+				} else {
+					writer.Appendf("// 0x%08X\n", min)
+				}
+			} else {
+				writer.Append(";\n")
+			}
 		}
 		if idx < len(elements)-1 && shouldHaveNewlineBetween(e, elements[idx+1]) {
 			writer.Append("\n")
@@ -148,6 +279,11 @@ func (ib *IfBlock) Render(writer CodeWriter) {
 
 func (ib *IfBlock) IsBlock() bool {
 	return true
+}
+
+func (ib *IfBlock) ResolveTypes(scope Scope) {
+	ib.conditional.ResolveTypes(scope)
+	ResolveTypes(scope, ib.body)
 }
 
 type ElseBlock struct {
@@ -193,14 +329,50 @@ func (eb *ElseBlock) IsBlock() bool {
 	return true
 }
 
+func (eb *ElseBlock) ResolveTypes(scope Scope) {
+	ResolveTypes(scope, eb.body)
+}
+
 type DebugBlock struct {
 	body []BlockElement
 }
 
 func (db *DebugBlock) Render(writer CodeWriter) {
 
+	if len(db.body) == 1 {
+		writer.Append("debug ")
+		RenderBlockElements(db.body, writer)
+	} else {
+		// Write out the top of the block
+		writer.Append("debug\n")
+		writer.Append("{\n")
+		writer.PushIndent()
+
+		// Write out the body
+		RenderBlockElements(db.body, writer)
+
+		// Write out the bottom of the block
+		writer.PopIndent()
+		writer.Append("}\n")
+	}
+}
+
+func (db *DebugBlock) IsBlock() bool {
+	return true
+}
+
+func (db *DebugBlock) ResolveTypes(scope Scope) {
+	ResolveTypes(scope, db.body)
+}
+
+type AtomicBlock struct {
+	body []BlockElement
+}
+
+func (db *AtomicBlock) Render(writer CodeWriter) {
+
 	// Write out the top of the block
-	writer.Append("debug\n")
+	writer.Append("atomic\n")
 	writer.Append("{\n")
 	writer.PushIndent()
 
@@ -212,8 +384,67 @@ func (db *DebugBlock) Render(writer CodeWriter) {
 	writer.Append("}\n")
 }
 
-func (db *DebugBlock) IsBlock() bool {
+func (db *AtomicBlock) IsBlock() bool {
 	return true
+}
+
+func (db *AtomicBlock) ResolveTypes(scope Scope) {
+	ResolveTypes(scope, db.body)
+}
+
+type ScheduleBlock struct {
+	body []BlockElement
+}
+
+func (db *ScheduleBlock) Render(writer CodeWriter) {
+
+	// Write out the top of the block
+	writer.Append("schedule\n")
+	writer.Append("{\n")
+	writer.PushIndent()
+
+	// Write out the body
+	RenderBlockElements(db.body, writer)
+
+	// Write out the bottom of the block
+	writer.PopIndent()
+	writer.Append("}\n")
+}
+
+func (db *ScheduleBlock) IsBlock() bool {
+	return true
+}
+
+func (db *ScheduleBlock) ResolveTypes(scope Scope) {
+	ResolveTypes(scope, db.body)
+}
+
+type ScheduleEveryBlock struct {
+	interval float32
+	body     []BlockElement
+}
+
+func (eb *ScheduleEveryBlock) Render(writer CodeWriter) {
+
+	// Write out the top of the block
+	writer.Appendf("every %f:\n", eb.interval)
+	writer.Append("{\n")
+	writer.PushIndent()
+
+	// Write out the body
+	RenderBlockElements(eb.body, writer)
+
+	// Write out the bottom of the block
+	writer.PopIndent()
+	writer.Append("}\n")
+}
+
+func (db *ScheduleEveryBlock) IsBlock() bool {
+	return true
+}
+
+func (db *ScheduleEveryBlock) ResolveTypes(scope Scope) {
+	ResolveTypes(scope, db.body)
 }
 
 type WhileLoop struct {
@@ -241,6 +472,11 @@ func (wl *WhileLoop) IsBlock() bool {
 	return true
 }
 
+func (wl *WhileLoop) ResolveTypes(scope Scope) {
+	wl.conditional.ResolveTypes(scope)
+	ResolveTypes(scope, wl.body)
+}
+
 type DoWhileLoop struct {
 	conditional *Statement
 	body        []BlockElement
@@ -265,6 +501,11 @@ func (wl *DoWhileLoop) Render(writer CodeWriter) {
 
 func (wl *DoWhileLoop) IsBlock() bool {
 	return true
+}
+
+func (wl *DoWhileLoop) ResolveTypes(scope Scope) {
+	wl.conditional.ResolveTypes(scope)
+	ResolveTypes(scope, wl.body)
 }
 
 type ForLoop struct {
@@ -296,6 +537,13 @@ func (fl *ForLoop) Render(writer CodeWriter) {
 
 func (fl *ForLoop) IsBlock() bool {
 	return true
+}
+
+func (fl *ForLoop) ResolveTypes(scope Scope) {
+	fl.init.ResolveTypes(scope)
+	fl.conditional.ResolveTypes(scope)
+	fl.increment.ResolveTypes(scope)
+	ResolveTypes(scope, fl.body)
 }
 
 func offsetToOpIndex(offset uint32, ops []Operation) int {
@@ -342,7 +590,7 @@ func isForOrWhileLoop(idx int, ops []Operation) int {
 		if jumpData.offset > op.offset {
 			endIdx := offsetToOpIndex(jumpData.offset, ops)
 
-			// Make sure we aren't dealing with a for loop
+			// Make sure we are dealing with a loop
 			if endIdx > 0 {
 				lastOp := ops[endIdx-1]
 				if lastOp.opcode == OP_JUMP {
@@ -407,6 +655,56 @@ func isDebugBlock(idx int, ops []Operation) int {
 	return -1
 }
 
+func isScheduleBlock(idx int, ops []Operation) int {
+	op := &ops[idx]
+	if op.opcode == OP_SCHEDULE_START {
+		targetIdx := idx + 1
+		target := &ops[idx+1]
+
+		for target.opcode == OP_SCHEDULE_EVERY {
+			everyData := target.data.(ScheduleEveryData)
+
+			targetIdx = offsetToOpIndex(everyData.skipOffset, ops)
+			if targetIdx == -1 {
+				return -1
+			}
+			target = &ops[targetIdx]
+		}
+
+		return targetIdx
+	}
+
+	return -1
+}
+
+func isAtomicBlock(idx int, ops []Operation) int {
+	lastAtomicStop := -1
+	op := &ops[idx]
+	if op.opcode == OP_ATOMIC_START {
+		atomicCounter := 1
+
+		for ii := idx + 1; ii < len(ops); ii++ {
+			op = &ops[ii]
+			switch op.opcode {
+			case OP_ATOMIC_START:
+				if lastAtomicStop != -1 {
+					return lastAtomicStop
+				}
+				atomicCounter++
+
+			case OP_ATOMIC_STOP:
+				if atomicCounter > 0 {
+					atomicCounter--
+				}
+				if atomicCounter == 0 {
+					lastAtomicStop = ii
+				}
+			}
+		}
+	}
+	return lastAtomicStop
+}
+
 func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 	elements := []BlockElement{}
 
@@ -425,12 +723,13 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 
 		// Create a node for this operation
 		node := new(OpGraph)
+		node.typeName = "UNKNOWN"
 		node.operation = op
 		node.code = RenderOperationCode(op, scope)
 
 		if op.data.PopCount() > 0 {
 			if op.data.PopCount() > len(stack) {
-				fmt.Printf("WARN: Stack underflow!")
+				fmt.Printf("WARN: Stack underflow at 0x%08X\n", op.offset)
 				//os.Exit(2)
 				continue
 			}
@@ -482,7 +781,7 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 					graph: node,
 				}
 			} else {
-				fmt.Printf("ERROR: Unhandled jump at offset 0x%08X", op.offset)
+				fmt.Printf("ERROR: Unhandled jump at offset 0x%08X\n", op.offset)
 				os.Exit(1)
 			}
 		} else if len(stack) == 0 && shouldRenderStatement(node) {
@@ -612,13 +911,61 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 		blockEnd = isDebugBlock(idx, ops)
 		if blockEnd != -1 {
 			child := &DebugBlock{
-				body: ParseOperations(scope, ops[idx+1:blockEnd+1]),
+				body: ParseOperations(scope, ops[idx+1:blockEnd]),
 			}
 
 			elements = append(elements, child)
 
 			// Back off by one since it will be incremented above
 			idx = blockEnd - 1
+			continue
+		}
+
+		// Check for atomic block
+		blockEnd = isAtomicBlock(idx, ops)
+		if blockEnd != -1 {
+			child := &AtomicBlock{
+				body: ParseOperations(scope, ops[idx+1:blockEnd]),
+			}
+
+			elements = append(elements, child)
+
+			idx = blockEnd
+			continue
+		}
+
+		// Check for schedule block
+		blockEnd = isScheduleBlock(idx, ops)
+		if blockEnd != -1 {
+			// Remove the looping jump at the end
+			ops[blockEnd].opcode = OP_REMOVED
+
+			schedule := &ScheduleBlock{
+				body: []BlockElement{},
+			}
+
+			// Iterate over the "every" blocks
+			targetIdx := idx + 1
+			target := ops[targetIdx]
+			for target.opcode == OP_SCHEDULE_EVERY {
+				everyData := target.data.(ScheduleEveryData)
+
+				nextIdx := offsetToOpIndex(everyData.skipOffset, ops)
+
+				everyBlock := &ScheduleEveryBlock{
+					interval: everyData.interval,
+					body:     ParseOperations(scope, ops[targetIdx+1:nextIdx]),
+				}
+
+				schedule.body = append(schedule.body, everyBlock)
+
+				targetIdx = nextIdx
+				target = ops[targetIdx]
+			}
+
+			elements = append(elements, schedule)
+
+			idx = blockEnd
 			continue
 		}
 
@@ -630,4 +977,10 @@ func ParseOperations(scope Scope, ops []Operation) []BlockElement {
 	}
 
 	return elements
+}
+
+func ResolveTypes(scope Scope, elements []BlockElement) {
+	for idx := range elements {
+		elements[idx].ResolveTypes(scope)
+	}
 }

@@ -1,9 +1,11 @@
 package main
 
 type Variable struct {
-	typeName     string
-	variableName string
-	stackIndex   uint32
+	typeName      string
+	variableName  string
+	stackIndex    uint32
+	possibleTypes map[string]bool
+	setCount      int
 }
 
 type Scope struct {

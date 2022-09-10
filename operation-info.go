@@ -84,11 +84,11 @@ const (
 	OP_CAST_FLT_TO_INT    byte = 0x38
 	OP_CAST_HANDLE_TO_INT byte = 0x39
 
-	OP_STRING_INIT byte = 0x3A
+	OP_HANDLE_INIT byte = 0x3A
 
 	OP_UNKNOWN_3B            byte = 0x3B
 	OP_UNKNOWN_3C            byte = 0x3C
-	OP_STRING_VARIABLE_WRITE byte = 0x3D
+	OP_HANDLE_VARIABLE_WRITE byte = 0x3D
 
 	OP_LITERAL_STRING byte = 0x3E
 	OP_STRING_EQUALS  byte = 0x3F
@@ -120,7 +120,7 @@ var OP_MAP = map[byte]OperationInfo{
 
 	OP_VARIABLE_READ:  {name: "OP_VARIABLE_READ", dataSize: 4, parser: ParseVariableRead},
 	OP_VARIABLE_WRITE: {name: "OP_VARIABLE_WRITE", dataSize: 4, parser: ParseVariableWrite},
-	OP_PUSH_STACK_N:   {name: "OP_PUSH_STACK_N", dataSize: 4, parser: ParseCountUInt32},
+	OP_PUSH_STACK_N:   {name: "OP_PUSH_STACK_N", dataSize: 4, omit: true, parser: ParseCountUInt32},
 
 	OP_JUMP:          {name: "OP_JUMP", dataSize: 4, parser: ParseJump},
 	OP_JUMP_IF_FALSE: {name: "OP_JUMP_IF_FALSE", dataSize: 4, parser: ParseConditionalJump},
@@ -169,22 +169,22 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_CAST_FLT_TO_INT:    {name: "OP_CAST_FLT_TO_INT", dataSize: 0, parser: ParseUnaryOperator},
 	OP_CAST_HANDLE_TO_INT: {name: "OP_CAST_HANDLE_TO_INT", dataSize: 0, parser: ParseUnaryOperator},
 
-	OP_STRING_INIT: {name: "OP_STRING_INIT", dataSize: 4, omit: false, parser: ParseStringInit},
+	OP_HANDLE_INIT: {name: "OP_HANDLE_INIT", dataSize: 4, omit: false, parser: ParseStringInit},
 
 	OP_UNKNOWN_3B:            {name: "OP_UNKNOWN_3B", dataSize: 0, omit: false, parser: ParseUnaryOperator},
 	OP_UNKNOWN_3C:            {name: "OP_UNKNOWN_3C", dataSize: 0, omit: false, parser: ParseUnaryOperator},
-	OP_STRING_VARIABLE_WRITE: {name: "OP_STRING_VARIABLE_WRITE", dataSize: 4, parser: ParseVariableWrite},
+	OP_HANDLE_VARIABLE_WRITE: {name: "OP_HANDLE_VARIABLE_WRITE", dataSize: 4, parser: ParseVariableWrite},
 
 	OP_LITERAL_STRING: {name: "OP_LITERAL_STRING", dataSize: 4, parser: ParseLiteralString},
 	OP_STRING_EQUALS:  {name: "OP_STRING_EQUALS", dataSize: 0, parser: ParseOperator},
 
 	OP_UNKNOWN_40: {name: "OP_UNKNOWN_40", dataSize: 0, omit: true}, // Something list related?
 
-	OP_SCHEDULE_START: {name: "OP_SCHEDULE_START", dataSize: 0},
+	OP_SCHEDULE_START: {name: "OP_SCHEDULE_START", dataSize: 0, parser: ParseEmpty},
 	OP_SCHEDULE_EVERY: {name: "OP_SCHEDULE_EVERY", dataSize: 12, parser: ParseScheduleEvery},
 
-	OP_ATOMIC_START: {name: "OP_ATOMIC_START", dataSize: 0},
-	OP_ATOMIC_STOP:  {name: "OP_ATOMIC_STOP", dataSize: 0},
+	OP_ATOMIC_START: {name: "OP_ATOMIC_START", dataSize: 0, parser: ParseEmpty},
+	OP_ATOMIC_STOP:  {name: "OP_ATOMIC_STOP", dataSize: 0, parser: ParseEmpty},
 
 	OP_JUMP_IF_NOT_DEBUG: {name: "OP_JUMP_IF_NOT_DEBUG", dataSize: 4, parser: ParseJump},
 
@@ -487,19 +487,22 @@ func ParseConditionalJump(data []byte, codeOffset uint32) OperationData {
 	}
 }
 
-type FunctionCallLocalData struct {
+type FunctionCallData struct {
 	declaration *FunctionDeclaration
 }
 
-func (d FunctionCallLocalData) String() string {
+func (d FunctionCallData) String() string {
 	return fmt.Sprintf("%s %d", d.declaration.GetScopedName(), len(*d.declaration.parameters))
 }
 
-func (d FunctionCallLocalData) PushCount() int {
+func (d FunctionCallData) PushCount() int {
 	return 1
 }
 
-func (d FunctionCallLocalData) PopCount() int {
+func (d FunctionCallData) PopCount() int {
+	if d.declaration.parameters == nil {
+		return 0
+	}
 	return len(*d.declaration.parameters)
 }
 
@@ -507,20 +510,24 @@ func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
 	offset := binary.LittleEndian.Uint32(data[4:8])
 	parameterCount := binary.LittleEndian.Uint32(data[8:12])
 
-	declaration := AddFunctionDeclaration("", fmt.Sprintf("local_function_%08X", offset))
-	FUNC_DEFINITION_MAP[offset] = declaration
+	declaration, ok := FUNC_DEFINITION_MAP[offset]
 
-	if declaration.parameters == nil {
-		params := make([]FunctionParameter, parameterCount)
-		for ii := 0; ii < len(params); ii++ {
-			p := &params[ii]
-			p.typeName = "UNKNOWN"
-			p.parameterName = fmt.Sprintf("param_%d", ii)
+	if !ok {
+		declaration = AddFunctionDeclaration("", fmt.Sprintf("local_function_%08X", offset))
+		FUNC_DEFINITION_MAP[offset] = declaration
+
+		if declaration.parameters == nil {
+			params := make([]FunctionParameter, parameterCount)
+			for ii := 0; ii < len(params); ii++ {
+				p := &params[ii]
+				p.typeName = "UNKNOWN"
+				p.parameterName = fmt.Sprintf("param_%d", ii)
+			}
+			declaration.parameters = &params
 		}
-		declaration.parameters = &params
 	}
 
-	return FunctionCallLocalData{
+	return FunctionCallData{
 		declaration: declaration,
 	}
 }
@@ -529,39 +536,27 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 	offset := binary.LittleEndian.Uint32(data[4:8])
 	parameterCount := binary.LittleEndian.Uint32(data[8:12])
 
-	declaration := AddFunctionDeclaration("", fmt.Sprintf("local_function_%08X", offset))
-	FUNC_DEFINITION_MAP[offset] = declaration
+	declaration, ok := FUNC_DEFINITION_MAP[offset]
 
-	if declaration.parameters == nil {
-		declaration.returnTypeName = "task"
-		params := make([]FunctionParameter, parameterCount)
-		for ii := 0; ii < len(params); ii++ {
-			p := &params[ii]
-			p.typeName = "UNKNOWN"
-			p.parameterName = fmt.Sprintf("param_%d", ii)
+	if !ok {
+		declaration = AddFunctionDeclaration("", fmt.Sprintf("local_function_%08X", offset))
+		FUNC_DEFINITION_MAP[offset] = declaration
+
+		if declaration.parameters == nil {
+			declaration.returnTypeName = "task"
+			params := make([]FunctionParameter, parameterCount)
+			for ii := 0; ii < len(params); ii++ {
+				p := &params[ii]
+				p.typeName = "UNKNOWN"
+				p.parameterName = fmt.Sprintf("param_%d", ii)
+			}
+			declaration.parameters = &params
 		}
-		declaration.parameters = &params
 	}
 
-	return FunctionCallLocalData{
+	return FunctionCallData{
 		declaration: declaration,
 	}
-}
-
-type FunctionCallImportedData struct {
-	declaration *FunctionDeclaration
-}
-
-func (d FunctionCallImportedData) String() string {
-	return fmt.Sprintf("%s %d", d.declaration.GetScopedName(), len(*d.declaration.parameters))
-}
-
-func (d FunctionCallImportedData) PushCount() int {
-	return 1
-}
-
-func (d FunctionCallImportedData) PopCount() int {
-	return len(*d.declaration.parameters)
 }
 
 func ParseFunctionCallImported(data []byte, codeOffset uint32) OperationData {
@@ -573,7 +568,7 @@ func ParseFunctionCallImported(data []byte, codeOffset uint32) OperationData {
 		declaration.parameters = &params
 	}
 
-	return FunctionCallImportedData{
+	return FunctionCallData{
 		declaration: declaration,
 	}
 }
@@ -621,6 +616,25 @@ func ParseLiteralString(data []byte, codeOffset uint32) OperationData {
 	return LiteralStringData{
 		index: binary.LittleEndian.Uint32(data),
 	}
+}
+
+type EmptyData struct {
+}
+
+func (d EmptyData) String() string {
+	return ""
+}
+
+func (d EmptyData) PushCount() int {
+	return 0
+}
+
+func (d EmptyData) PopCount() int {
+	return 0
+}
+
+func ParseEmpty(data []byte, codeOffset uint32) OperationData {
+	return EmptyData{}
 }
 
 type ScheduleEveryData struct {

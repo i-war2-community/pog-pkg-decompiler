@@ -113,6 +113,8 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 		}
 
 		result.parameters = &parameters
+	} else {
+		result.parameters = &[]FunctionParameter{}
 	}
 
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
@@ -128,12 +130,16 @@ func (f *FunctionDeclaration) GetScopedName() string {
 }
 
 func writeLocalVariableDeclarations(variables []Variable, writer CodeWriter) {
+	written := 0
 	for ii := 0; ii < len(variables); ii++ {
 		lv := &variables[ii]
-		writer.Appendf("%s %s;\n", lv.typeName, lv.variableName)
+		if lv.setCount > 0 {
+			writer.Appendf("%s %s;\n", lv.typeName, lv.variableName)
+			written++
+		}
 	}
 
-	if len(variables) > 0 {
+	if written > 0 {
 		writer.Append("\n")
 	}
 }
@@ -178,7 +184,7 @@ func shouldRenderStatement(s *OpGraph) bool {
 	}
 
 	// Don't render string init statements
-	if s.operation.opcode == OP_POP_STACK && s.children[0].operation.opcode == OP_VARIABLE_WRITE && s.children[0].children[0].operation.opcode == OP_STRING_INIT {
+	if s.operation.opcode == OP_POP_STACK && s.children[0].operation.opcode == OP_VARIABLE_WRITE && s.children[0].children[0].operation.opcode == OP_HANDLE_INIT {
 		return false
 	}
 	return true
@@ -201,9 +207,10 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		for ii := 0; ii < len(*declaration.parameters); ii++ {
 			param := &(*declaration.parameters)[ii]
 			v := Variable{
-				typeName:     param.typeName,
-				variableName: param.parameterName,
-				stackIndex:   uint32(ii),
+				typeName:      param.typeName,
+				variableName:  param.parameterName,
+				stackIndex:    uint32(ii),
+				possibleTypes: map[string]bool{},
 			}
 			scope.variables = append(scope.variables, v)
 		}
@@ -218,18 +225,16 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		var ii uint32
 		for ii = 0; ii < count; ii++ {
 			lv := Variable{
-				typeName:     "UNKNOWN",
-				variableName: fmt.Sprintf("local_%d", ii),
-				stackIndex:   uint32(ii + scope.localVariableIndexOffset),
+				typeName:      "UNKNOWN",
+				variableName:  fmt.Sprintf("local_%d", ii),
+				stackIndex:    uint32(ii + scope.localVariableIndexOffset),
+				possibleTypes: map[string]bool{},
 			}
 			scope.variables = append(scope.variables, lv)
 		}
 		// Skip over the local variable opcode
 		startingIndex++
 	}
-
-	// TODO: This needs to happen later, once we know our variable types etc
-	//writeLocalVariableDeclarations(scope.variables[localVariableIndexOffset:], writer)
 
 	// Find the end of the function
 	var functionEnd *Operation = nil
@@ -238,6 +243,15 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	for idx := startingIndex; idx < len(OPERATIONS); idx++ {
 		if OPERATIONS[idx].opcode == OP_FUNCTION_END {
 			idx--
+
+			if len(declaration.returnTypeName) == 0 && OPERATIONS[idx].opcode == OP_UNKNOWN_3C && OPERATIONS[idx-1].opcode == OP_LITERAL_FALSE {
+				idx--
+			}
+
+			if OPERATIONS[idx].opcode == OP_UNKNOWN_3C && OPERATIONS[idx-1].opcode == OP_UNKNOWN_40 {
+				idx--
+			}
+
 			functionEnd = &OPERATIONS[idx]
 			endIdx = idx
 
@@ -252,7 +266,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 				}
 				idx -= 3
 				functionEnd = &OPERATIONS[idx]
-				endIdx = idx
+				//endIdx = idx
 			}
 			break
 		}
@@ -270,11 +284,29 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	blockOps := OPERATIONS[startingIndex:endIdx]
 	body := ParseOperations(scope, blockOps)
 
-	// TODO: Resolve variable types, etc
+	// Resolve variable types
+	ResolveTypes(scope, body)
+
+	for idx := range scope.variables {
+		v := &scope.variables[idx]
+		if v.typeName == "UNKNOWN" {
+			if len(v.possibleTypes) == 1 {
+				for key := range v.possibleTypes {
+					v.typeName = key
+					break
+				}
+			} else if len(v.possibleTypes) > 1 {
+				v.typeName = "UNKNOWN"
+			}
+		}
+	}
+
+	// Resolve variable types
+	ResolveTypes(scope, body)
 
 	// Write the function header
-	writer.Appendf(renderFunctionDefinitionHeader(declaration))
-	writer.Appendf("\n{\n")
+	writer.Append(renderFunctionDefinitionHeader(declaration))
+	writer.Append("\n{\n")
 	writer.PushIndent()
 
 	writeLocalVariableDeclarations(scope.variables[scope.localVariableIndexOffset:], writer)
@@ -282,7 +314,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	RenderBlockElements(body, writer)
 
 	writer.PopIndent()
-	writer.Appendf("}\n")
+	writer.Append("}\n\n")
 
 	return endIdx
 }
@@ -291,7 +323,7 @@ func PrintFunctionAssembly(declaration *FunctionDeclaration, startingIndex int, 
 	writer.Appendf("// ==================== START_FUNCTION %s\n", declaration.GetScopedName())
 	for idx := startingIndex; idx < len(OPERATIONS); idx++ {
 		operation := OPERATIONS[idx]
-		writer.Appendf("// 0x%08X 0x%08X ", operation.offset+uint32(initialOffset), operation.offset)
+		writer.Appendf("// 0x%08X ", operation.offset)
 		operation.WriteAssembly(writer)
 		writer.Append("\n")
 
