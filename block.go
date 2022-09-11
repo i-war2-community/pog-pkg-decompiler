@@ -10,6 +10,24 @@ import (
 
 const UNKNOWN_TYPE = "UNKNOWN"
 
+type BlockContext struct {
+	breakOffset    *uint32
+	continueOffset *uint32
+	currentBlock   BlockElement
+}
+
+func (bc *BlockContext) IsCurrentBlockIfBlock() bool {
+	if bc.currentBlock == nil {
+		return false
+	}
+
+	switch bc.currentBlock.(type) {
+	case *IfBlock:
+		return true
+	}
+	return false
+}
+
 type BlockElement interface {
 	Render(writer CodeWriter)
 	IsBlock() bool
@@ -44,6 +62,15 @@ func (og *OpGraph) ShouldRender() bool {
 		return false
 	}
 	return true
+}
+
+func (og *OpGraph) FlagAsElseJump() {
+	elseJumpCode := "else_jump"
+	og.code = &elseJumpCode
+}
+
+func (og *OpGraph) IsElseJump() bool {
+	return og.code != nil && *og.code == "else_jump"
 }
 
 func (og *OpGraph) GetVariableIndices() []uint32 {
@@ -119,27 +146,39 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				param := &(*funcData.declaration.parameters)[ii]
 				child := og.children[len(og.children)-1-ii]
 
-				if param.typeName == UNKNOWN_TYPE {
-					continue
+				if child.typeName != UNKNOWN_TYPE {
+					param.potentialTypes[child.typeName] = true
+				} else {
+					switch child.operation.opcode {
+					case OP_LITERAL_ZERO:
+						param.potentialTypes["bool"] = true
+						param.potentialTypes["int"] = true
+
+					case OP_LITERAL_ONE:
+						param.potentialTypes["bool"] = true
+						param.potentialTypes["int"] = true
+					}
 				}
 
-				switch child.operation.opcode {
-				case OP_LITERAL_ZERO:
-					if param.typeName == "bool" {
-						child.code = &falseCode
-					} else if _, ok := HANDLE_MAP[param.typeName]; ok {
-						child.code = &noneCode
-					}
+				if param.typeName != UNKNOWN_TYPE {
+					switch child.operation.opcode {
+					case OP_LITERAL_ZERO:
+						if param.typeName == "bool" {
+							child.code = &falseCode
+						} else if _, ok := HANDLE_MAP[param.typeName]; ok {
+							child.code = &noneCode
+						}
 
-				case OP_LITERAL_ONE:
-					if param.typeName == "bool" {
-						child.code = &trueCode
-					}
+					case OP_LITERAL_ONE:
+						if param.typeName == "bool" {
+							child.code = &trueCode
+						}
 
-				case OP_VARIABLE_READ:
-					child.typeName = param.typeName
-					varData := child.operation.data.(VariableReadData)
-					scope.variables[varData.index].referencedTypes[param.typeName] = true
+					case OP_VARIABLE_READ:
+						child.typeName = param.typeName
+						varData := child.operation.data.(VariableReadData)
+						scope.variables[varData.index].referencedTypes[param.typeName] = true
+					}
 				}
 			}
 		}
@@ -147,10 +186,10 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	case OP_LOGICAL_AND, OP_LOGICAL_OR, OP_LOGICAL_NOT:
 		og.typeName = "bool"
 
-	case OP_INT_NOT_EQUALS, OP_INT_GT, OP_INT_LT, OP_INT_GT_EQUALS, OP_INT_LT_EQUALS:
+	case OP_INT_GT, OP_INT_LT, OP_INT_GT_EQUALS, OP_INT_LT_EQUALS:
 		og.typeName = "bool"
 
-	case OP_INT_EQUALS:
+	case OP_INT_EQUALS, OP_INT_NOT_EQUALS:
 		og.typeName = "bool"
 
 		child1 := og.children[0]
@@ -221,6 +260,23 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				if returnType != UNKNOWN_TYPE {
 					scope.function.possibleReturnTypes[returnType] = true
 				}
+			} else {
+				if len(og.children) > 0 {
+					returnOp := og.children[0]
+					switch returnOp.operation.opcode {
+					case OP_LITERAL_ZERO:
+						if IsHandleType(scope.function.returnTypeName) {
+							returnOp.code = &noneCode
+						} else if scope.function.returnTypeName == "bool" {
+							returnOp.code = &falseCode
+						}
+
+					case OP_LITERAL_ONE:
+						if scope.function.returnTypeName == "bool" {
+							returnOp.code = &trueCode
+						}
+					}
+				}
 			}
 		}
 
@@ -242,7 +298,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
 
 	if len(node.children) == 2 && !IsFunctionCall(node.operation) {
-		if !onlyChild {
+		if !onlyChild || node.operation.opcode == OP_STRING_EQUALS {
 			writer.Append("(")
 		}
 		printGraphNode(node.children[0], writer, false)
@@ -267,7 +323,7 @@ func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
 	if len(node.children) == 2 && !IsFunctionCall(node.operation) {
 		writer.Append(" ")
 		printGraphNode(node.children[1], writer, false)
-		if !onlyChild {
+		if !onlyChild || node.operation.opcode == OP_STRING_EQUALS {
 			writer.Append(")")
 		}
 	}
@@ -296,6 +352,15 @@ type Statement struct {
 
 func (s *Statement) Render(writer CodeWriter) {
 	printGraphNode(s.graph, writer, true)
+}
+
+func (s *Statement) RenderAssemblyOffsets(writer CodeWriter) {
+	min, max := s.graph.GetOffsetRange()
+	if min != max {
+		writer.Appendf("0x%08X - 0x%08X", min, max)
+	} else {
+		writer.Appendf("0x%08X", min)
+	}
 }
 
 func (s *Statement) IsBlock() bool {
@@ -329,14 +394,10 @@ func RenderBlockElements(elements []BlockElement, writer CodeWriter) {
 		e.Render(writer)
 		if !e.IsBlock() {
 			if OUTPUT_ASSEMBLY {
-				writer.Append("; ")
+				writer.Append("; // ")
 				s := e.(*Statement)
-				min, max := s.graph.GetOffsetRange()
-				if min != max {
-					writer.Appendf("// 0x%08X - 0x%08X\n", min, max)
-				} else {
-					writer.Appendf("// 0x%08X\n", min)
-				}
+				s.RenderAssemblyOffsets(writer)
+				writer.Append("\n")
 			} else {
 				writer.Append(";\n")
 			}
@@ -357,7 +418,13 @@ func (ib *IfBlock) Render(writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("if ( ")
 	ib.conditional.Render(writer)
-	writer.Append(" )\n")
+	if OUTPUT_ASSEMBLY {
+		writer.Append(" ) // ")
+		ib.conditional.RenderAssemblyOffsets(writer)
+		writer.Append("\n")
+	} else {
+		writer.Append(" )\n")
+	}
 	writer.Append("{\n")
 	writer.PushIndent()
 
@@ -393,9 +460,12 @@ func (eb *ElseBlock) Render(writer CodeWriter) {
 
 	inline := false
 
+	// If we only have one element and it is any kind of block, just do an else without braces
 	if len(eb.body) == 1 && eb.body[0].IsBlock() {
 		inline = true
 	}
+
+	// If we only have two elements, an if and another else, just do an else without braces
 	if len(eb.body) == 2 {
 		_, okIf := eb.body[0].(*IfBlock)
 		_, okElse := eb.body[1].(*ElseBlock)
@@ -575,7 +645,13 @@ func (wl *WhileLoop) Render(writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("while ( ")
 	wl.conditional.Render(writer)
-	writer.Append(" )\n")
+	if OUTPUT_ASSEMBLY {
+		writer.Append(" ) // ")
+		wl.conditional.RenderAssemblyOffsets(writer)
+		writer.Append("\n")
+	} else {
+		writer.Append(" )\n")
+	}
 	writer.Append("{\n")
 	writer.PushIndent()
 
@@ -620,7 +696,13 @@ func (wl *DoWhileLoop) Render(writer CodeWriter) {
 	writer.Append("}\n")
 	writer.Append("while ( ")
 	wl.conditional.Render(writer)
-	writer.Append(" );\n")
+	if OUTPUT_ASSEMBLY {
+		writer.Append(" ); // ")
+		wl.conditional.RenderAssemblyOffsets(writer)
+		writer.Append("\n")
+	} else {
+		writer.Append(" );\n")
+	}
 }
 
 func (wl *DoWhileLoop) IsBlock() bool {
@@ -651,7 +733,17 @@ func (fl *ForLoop) Render(writer CodeWriter) {
 	fl.conditional.Render(writer)
 	writer.Append("; ")
 	fl.increment.Render(writer)
-	writer.Append(" )\n")
+	if OUTPUT_ASSEMBLY {
+		writer.Append(" ) // ")
+		fl.init.RenderAssemblyOffsets(writer)
+		writer.Append("; ")
+		fl.conditional.RenderAssemblyOffsets(writer)
+		writer.Append("; ")
+		fl.increment.RenderAssemblyOffsets(writer)
+		writer.Append("\n")
+	} else {
+		writer.Append(" )\n")
+	}
 	writer.Append("{\n")
 	writer.PushIndent()
 
@@ -678,6 +770,94 @@ func (fl *ForLoop) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, fl.body)
 }
 
+type SwitchBlock struct {
+	conditional *Statement
+	body        []BlockElement
+}
+
+func (sb *SwitchBlock) Render(writer CodeWriter) {
+	// Write out the top of the block
+	writer.Append("switch ( ")
+	if sb.conditional != nil {
+		sb.conditional.Render(writer)
+	}
+	if OUTPUT_ASSEMBLY {
+		writer.Append(" ) // ")
+		if sb.conditional != nil {
+			sb.conditional.RenderAssemblyOffsets(writer)
+		}
+		writer.Append("\n")
+	} else {
+		writer.Append(" )\n")
+	}
+	writer.Append("{\n")
+	writer.PushIndent()
+
+	// Write out the body
+	RenderBlockElements(sb.body, writer)
+
+	// Write out the bottom of the block
+	writer.PopIndent()
+	writer.Append("}\n")
+}
+
+func (sb *SwitchBlock) IsBlock() bool {
+	return true
+}
+
+func (sb *SwitchBlock) RendersAsBlock() bool {
+	return true
+}
+
+func (sb *SwitchBlock) ResolveTypes(scope *Scope) {
+	if sb.conditional != nil {
+		sb.conditional.ResolveTypes(scope)
+	}
+	ResolveTypes(scope, sb.body)
+}
+
+type CaseBlock struct {
+	startingOffset uint32
+	jumpLocation   uint32
+	value          *int32
+	body           []BlockElement
+}
+
+func (cb *CaseBlock) Render(writer CodeWriter) {
+	// Write out the top of the block
+	if cb.value != nil {
+		writer.Appendf("case %d:", *cb.value)
+	} else {
+		writer.Append("default:")
+	}
+
+	if OUTPUT_ASSEMBLY {
+		writer.Appendf(" // 0x%08X\n", cb.jumpLocation)
+	} else {
+		writer.Append("\n")
+	}
+
+	writer.PushIndent()
+
+	// Write out the body
+	RenderBlockElements(cb.body, writer)
+
+	// Write out the bottom of the block
+	writer.PopIndent()
+}
+
+func (cb *CaseBlock) IsBlock() bool {
+	return true
+}
+
+func (cb *CaseBlock) RendersAsBlock() bool {
+	return true
+}
+
+func (cb *CaseBlock) ResolveTypes(scope *Scope) {
+	ResolveTypes(scope, cb.body)
+}
+
 func offsetToOpIndex(offset uint32, ops []Operation) int {
 	for idx := range ops {
 		if ops[idx].offset == offset {
@@ -688,7 +868,7 @@ func offsetToOpIndex(offset uint32, ops []Operation) int {
 	return -1
 }
 
-func isIfBlock(idx int, ops []Operation) int {
+func isIfBlock(idx int, conditionalOffset uint32, ops []Operation) int {
 	op := &ops[idx]
 
 	if op.opcode == OP_JUMP_IF_FALSE {
@@ -701,7 +881,7 @@ func isIfBlock(idx int, ops []Operation) int {
 				lastOp := ops[endIdx-1]
 				if lastOp.opcode == OP_JUMP {
 					jumpData := lastOp.data.(JumpData)
-					if jumpData.offset < op.offset && jumpData.offset >= ops[0].offset {
+					if jumpData.offset == conditionalOffset {
 						return -1
 					}
 				}
@@ -714,7 +894,7 @@ func isIfBlock(idx int, ops []Operation) int {
 	return -1
 }
 
-func isForOrWhileLoop(idx int, ops []Operation) int {
+func isForOrWhileLoop(idx int, conditionalOffset uint32, ops []Operation) int {
 	op := &ops[idx]
 
 	if op.opcode == OP_JUMP_IF_FALSE {
@@ -727,7 +907,7 @@ func isForOrWhileLoop(idx int, ops []Operation) int {
 				lastOp := ops[endIdx-1]
 				if lastOp.opcode == OP_JUMP {
 					jumpData := lastOp.data.(JumpData)
-					if jumpData.offset < op.offset && jumpData.offset >= ops[0].offset {
+					if jumpData.offset == conditionalOffset {
 						return endIdx
 					}
 				}
@@ -762,8 +942,8 @@ func shouldUseForLoop(init BlockElement, condition *Statement, increment BlockEl
 	return len(intersection) > 0
 }
 
-func isDoWhileLoop(idx int, ops []Operation) int {
-	for ii := len(ops) - 1; ii > idx; ii-- {
+func isDoWhileLoop(idx int, maxIdx int, ops []Operation) int {
+	for ii := maxIdx; ii > idx; ii-- {
 		op := &ops[ii]
 		if op.opcode == OP_JUMP_IF_TRUE {
 			jumpData := op.data.(ConditionalJumpData)
@@ -783,7 +963,8 @@ func isDebugBlock(idx int, ops []Operation) int {
 		jumpData := op.data.(JumpData)
 		result := offsetToOpIndex(jumpData.offset, ops)
 		if result == -1 {
-			fmt.Printf("Failed to deal with debug block")
+			fmt.Printf("ERROR: Failed to deal with debug block at offset 0x%08X\n", op.offset)
+			os.Exit(1)
 		}
 		return result
 	}
@@ -839,22 +1020,204 @@ func isAtomicBlock(idx int, ops []Operation) int {
 		}
 
 		if lastAtomicStop == -1 {
-			fmt.Printf("Failed to deal with atomic block")
+			fmt.Printf("ERROR: Failed to deal with atomic block at offset 0x%08X\n", op.offset)
+			os.Exit(2)
 		}
 	}
 	return lastAtomicStop
 }
 
-func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
+func parseSwitchBlock(scope *Scope, context *BlockContext, condStart int, condEnd int, switchEnd int, cases []*CaseBlock, ops []Operation) *SwitchBlock {
+	switchBlock := &SwitchBlock{}
+
+	// Take the conditional ops and append a pop to them so we end up parsing a statement
+	conditionalOps := ops[condStart : condEnd+1]
+	popOp := Operation{
+		opcode: OP_POP_STACK,
+		data:   PopStackData{},
+	}
+	conditionalOps = append(conditionalOps, popOp)
+
+	conditionalStatement := ParseOperations(scope, context, conditionalOps, 0, len(conditionalOps)-1)
+
+	if len(conditionalStatement) == 0 || conditionalStatement[0].IsBlock() {
+		fmt.Printf("ERROR: Failed to parse conditional statement for switch at 0x%08X\n", ops[condStart].offset)
+		os.Exit(3)
+	}
+
+	switchBlock.conditional = conditionalStatement[0].(*Statement)
+
+	for ii := range cases {
+		startIdx := offsetToOpIndex(cases[ii].startingOffset, ops)
+		if startIdx == -1 {
+			fmt.Printf("ERROR: Failed to parse conditional statement for switch at 0x%08X\n", ops[condStart].offset)
+			os.Exit(4)
+		}
+
+		endIdx := -1
+		if ii < len(cases)-1 {
+			endIdx = offsetToOpIndex(cases[ii+1].startingOffset, ops)
+		} else {
+			endIdx = condStart
+		}
+
+		if endIdx == -1 {
+			fmt.Printf("ERROR: Failed to parse conditional statement for switch at 0x%08X\n", ops[condStart].offset)
+			os.Exit(5)
+		}
+
+		caseContext := &BlockContext{
+			breakOffset:    &ops[switchEnd].offset,
+			continueOffset: context.continueOffset,
+			currentBlock:   cases[ii],
+		}
+
+		body := ParseOperations(scope, caseContext, ops, startIdx, endIdx-1)
+
+		// There is an implicit break jump at the end of the switch we need to remove
+		if ii == len(cases)-1 {
+			bodyLen := len(body)
+			// Do a sanity check
+			if !body[bodyLen-1].IsBlock() && body[bodyLen-1].(*Statement).graph.operation.opcode == OP_JUMP {
+				// Remove the implicit break
+				body = body[:bodyLen-1]
+			}
+		}
+		cases[ii].body = body
+		switchBlock.body = append(switchBlock.body, cases[ii])
+	}
+
+	return switchBlock
+}
+
+func isSwitchBlock(scope *Scope, context *BlockContext, idx int, ops []Operation) (*SwitchBlock, int) {
+	op := &ops[idx]
+	if op.opcode == OP_JUMP {
+		jumpData := op.data.(JumpData)
+		// Make sure we are jumping forward
+		if jumpData.offset > op.offset {
+			condStart := offsetToOpIndex(jumpData.offset, ops)
+			if condStart == -1 {
+				return nil, -1
+			}
+			condEnd := -1
+			cases := []*CaseBlock{}
+
+			// Loop through and find the first OP_CLONE_STACK without finding any jumps
+			for idx := condStart; idx < len(ops); {
+				oper := ops[idx]
+				if condEnd == -1 {
+					switch oper.opcode {
+					// If we find some jump before the clone stack, we have stumbled onto a different switch statement
+					case OP_JUMP, OP_JUMP_IF_FALSE, OP_JUMP_IF_TRUE, OP_JUMP_IF_NOT_DEBUG:
+						return nil, -1
+
+					case OP_CLONE_STACK:
+						condEnd = idx - 1
+					}
+					idx++
+				} else {
+					if oper.opcode == OP_CLONE_STACK {
+						idx++
+						continue
+					}
+					if oper.opcode == OP_JUMP {
+						jumpData := oper.data.(JumpData)
+						// See if we have a jump that takes us between the start of the switch and the end, which would be the default: section
+						if jumpData.offset < oper.offset && jumpData.offset > op.offset {
+							// Add the default block
+							caseBlock := &CaseBlock{
+								startingOffset: jumpData.offset,
+								jumpLocation:   oper.offset,
+							}
+							cases = append(cases, caseBlock)
+
+							// We want to skip over this jump later
+							return parseSwitchBlock(scope, context, condStart, condEnd, idx+1, cases, ops), idx + 1
+						} else {
+							return nil, -1
+						}
+					}
+
+					// Break out if there aren't enough operations left
+					if len(ops)-idx < 3 {
+						if len(cases) > 0 {
+							return parseSwitchBlock(scope, context, condStart, condEnd, idx, cases, ops), idx
+						}
+						return nil, -1
+					}
+
+					oper2 := ops[idx+1]
+					oper3 := ops[idx+2]
+
+					if !IsLiteralInteger(&oper) || oper2.opcode != OP_INT_EQUALS || oper3.opcode != OP_JUMP_IF_TRUE {
+						if len(cases) > 0 {
+							return parseSwitchBlock(scope, context, condStart, condEnd, idx, cases, ops), idx
+						}
+						return nil, -1
+					}
+
+					// Add a case block for this
+					jumpData := oper3.data.(ConditionalJumpData)
+					caseValue := GetLiteralIntegerValue(&oper)
+					caseBlock := &CaseBlock{
+						startingOffset: jumpData.offset,
+						jumpLocation:   oper.offset,
+						value:          &caseValue,
+					}
+					cases = append(cases, caseBlock)
+
+					idx += 3
+				}
+			}
+		}
+	}
+
+	return nil, -1
+}
+
+func ParseOperations(scope *Scope, context *BlockContext, ops []Operation, minOpIdx int, maxOpIdx int) []BlockElement {
 	elements := []BlockElement{}
 
 	// Create the stack
 	stack := []*OpGraph{}
 
-	for idx := 0; idx < len(ops); idx++ {
+	for idx := minOpIdx; idx <= maxOpIdx; idx++ {
+		blockEnd := -1
 		op := &ops[idx]
 
 		opInfo := OP_MAP[op.opcode]
+
+		// Check for do-while loop
+		blockEnd = isDoWhileLoop(idx, maxOpIdx, ops)
+		if blockEnd != -1 {
+			// Reset the stack
+			stack = []*OpGraph{}
+
+			child := &DoWhileLoop{}
+
+			// Change the jump at the end to a pop so that we will get the do-while conditional as the last statement of the loop body below
+			ops[blockEnd].opcode = OP_POP_STACK
+			ops[blockEnd].data = PopStackData{}
+
+			loopContext := &BlockContext{
+				currentBlock:   child,
+				continueOffset: &op.offset,
+				breakOffset:    &ops[blockEnd+1].offset,
+			}
+
+			loopBody := ParseOperations(scope, loopContext, ops, idx, blockEnd)
+
+			// Remove the last statement from the body, that should be our conditional
+			child.conditional = loopBody[len(loopBody)-1].(*Statement)
+			child.body = loopBody[:len(loopBody)-1]
+
+			elements = append(elements, child)
+
+			// Set our idx to what used to be the jump statement so we can move on to the next statement
+			idx = blockEnd
+			continue
+		}
 
 		// Skip over useless operations
 		if opInfo.omit || op.data == nil {
@@ -886,174 +1249,148 @@ func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 
 		var statement *Statement = nil
 
-		// Check for potential return statement
-		if op.opcode == OP_JUMP {
-			jumpData := op.data.(JumpData)
-			if jumpData.offset == scope.functionEndOffset {
-				if len(stack) > 0 {
-					retString := "return "
-					last := len(stack) - 1
-					child := stack[last]
-					stack = stack[:last]
-					node.children = append(node.children, child)
-					node.code = &retString
-				} else {
-					retString := "return"
-					node.code = &retString
-				}
-				statement = &Statement{
-					graph: node,
-				}
-			} else if jumpData.offset > ops[len(ops)-1].offset {
-				// If we are jumping beyond our current block, this should be a break statement
-				breakString := "break"
-				node.code = &breakString
-
-				statement = &Statement{
-					graph: node,
-				}
-			} else if jumpData.offset < ops[0].offset {
-				// If we are jumping before our current block, it must be a continue statement
-				continueString := "continue"
-				node.code = &continueString
-
-				statement = &Statement{
-					graph: node,
-				}
-			} else {
-				fmt.Printf("ERROR: Unhandled jump at offset 0x%08X\n", op.offset)
-				os.Exit(1)
-			}
-		} else if len(stack) == 0 && node.ShouldRender() {
+		if len(stack) == 0 && node.ShouldRender() {
 			statement = &Statement{
 				graph: node,
 			}
 		}
-		blockEnd := -1
 
-		// Check for if block
-		blockEnd = isIfBlock(idx, ops)
-		if blockEnd != -1 {
-			child := &IfBlock{
-				conditional: statement,
-				body:        ParseOperations(scope, ops[idx+1:blockEnd]),
+		// For it to be an if, while, or for block we need to have just finished parsing a conditional statement
+		if statement != nil {
+			min, _ := statement.graph.GetOffsetRange()
+
+			// Check for if block
+			blockEnd = isIfBlock(idx, min, ops)
+			if blockEnd != -1 {
+				child := &IfBlock{
+					conditional: statement,
+				}
+
+				blockContext := &BlockContext{
+					breakOffset:    context.breakOffset,
+					continueOffset: context.continueOffset,
+					currentBlock:   child,
+				}
+
+				child.body = ParseOperations(scope, blockContext, ops, idx+1, blockEnd-1)
+
+				elements = append(elements, child)
+
+				var lastElement BlockElement = nil
+
+				if len(child.body) != 0 {
+					lastElement = child.body[len(child.body)-1]
+				}
+
+				if lastElement != nil && !lastElement.IsBlock() && lastElement.(*Statement).graph.IsElseJump() { //if endOp.opcode == OP_JUMP {
+					endOp := lastElement.(*Statement).graph.operation
+					jumpData := endOp.data.(JumpData)
+					// Make sure this isn't a continue/break/return
+					//if jumpData.offset > endOp.offset && jumpData.offset != scope.functionEndOffset {
+					elseEndIdx := offsetToOpIndex(jumpData.offset, ops)
+					if elseEndIdx == -1 {
+						fmt.Printf("ERROR: Failed to parse else block at 0x%08X\n", ops[blockEnd].offset)
+						os.Exit(3)
+					}
+
+					// Remove the implicit jump at the end of the if block
+					child.body = child.body[:len(child.body)-1]
+
+					elseChild := &ElseBlock{}
+
+					elseBlockContext := &BlockContext{
+						breakOffset:    context.breakOffset,
+						continueOffset: context.continueOffset,
+						currentBlock:   elseChild,
+					}
+
+					elseChild.body = ParseOperations(scope, elseBlockContext, ops, blockEnd, elseEndIdx-1)
+					elements = append(elements, elseChild)
+					idx = elseEndIdx - 1
+					continue
+				}
+
+				// Back off by one since it will be incremented above
+				idx = blockEnd - 1
+				continue
 			}
 
-			elements = append(elements, child)
+			// Check for for/while loop
+			blockEnd = isForOrWhileLoop(idx, min, ops)
+			if blockEnd != -1 {
+				// Clear out the jump at the end since it has served it's purpose
+				ops[blockEnd-1].Remove()
 
-			endOp := &ops[blockEnd-1]
+				// See if there is a last element in our current block
+				var lastElement BlockElement = nil
+				var lastBodyElement BlockElement = nil
 
-			if endOp.opcode == OP_JUMP {
-				jumpData := endOp.data.(JumpData)
-				// Make sure this isn't a continue/break/return
-				if jumpData.offset > endOp.offset && jumpData.offset != scope.functionEndOffset {
-					elseEndIdx := offsetToOpIndex(jumpData.offset, ops)
-					if elseEndIdx != -1 {
-						ops[blockEnd-1].Remove()
-						// Re-parse the operations excluding the jump at the end since it is for the else block
-						child.body = ParseOperations(scope, ops[idx+1:blockEnd])
+				// Get the last element we already processed because it is our init statement
+				if len(elements) > 0 {
+					lastElement = elements[len(elements)-1]
+				}
 
-						elseChild := &ElseBlock{
-							body: ParseOperations(scope, ops[blockEnd:elseEndIdx+1]),
-						}
-						elements = append(elements, elseChild)
-						idx = elseEndIdx - 1
-						continue
+				min, _ := statement.graph.GetOffsetRange()
+
+				loopContext := &BlockContext{
+					breakOffset:    &ops[blockEnd].offset,
+					continueOffset: &min,
+					currentBlock:   nil, // We can't set the current block because we don't know if we are a for or a while yet
+				}
+
+				loopBody := ParseOperations(scope, loopContext, ops, idx+1, blockEnd-1)
+
+				// See if there is a last element in our loop body, it might be an increment statement in a for loop
+				if len(loopBody) > 0 {
+					lastBodyElement = loopBody[len(loopBody)-1]
+				}
+
+				var child BlockElement = nil
+
+				// If they were both statements, check to see if we should use a for loop instead
+				if shouldUseForLoop(lastElement, statement, lastBodyElement) {
+					// Remove the last element since it is our init statement
+					initStatement := elements[len(elements)-1].(*Statement)
+					elements = elements[:len(elements)-1]
+
+					// Remove the last body element since it is our increment statement
+					incrementStatement := loopBody[len(loopBody)-1].(*Statement)
+					loopBody = loopBody[:len(loopBody)-1]
+
+					child = &ForLoop{
+						init:        initStatement,
+						conditional: statement,
+						increment:   incrementStatement,
+						body:        loopBody,
+					}
+				} else {
+					child = &WhileLoop{
+						conditional: statement,
+						body:        loopBody,
 					}
 				}
+
+				elements = append(elements, child)
+
+				// Back off by one since it will be incremented above
+				idx = blockEnd - 1
+				continue
 			}
-
-			// Back off by one since it will be incremented above
-			idx = blockEnd - 1
-			continue
-		}
-
-		// Check for for/while loop
-		blockEnd = isForOrWhileLoop(idx, ops)
-		if blockEnd != -1 {
-			// Clear out the jump at the end since it has served it's purpose
-			ops[blockEnd-1].Remove()
-
-			// See if there is a last element in our current block
-			var lastElement BlockElement = nil
-			var lastBodyElement BlockElement = nil
-
-			if len(elements) > 0 {
-				lastElement = elements[len(elements)-1]
-			}
-
-			loopBody := ParseOperations(scope, ops[idx+1:blockEnd])
-
-			// See if there is a last element in our loop body
-			if len(loopBody) > 0 {
-				lastBodyElement = loopBody[len(loopBody)-1]
-			}
-
-			var child BlockElement = nil
-
-			// If they were both statements, check to see if we should use a for loop instead
-			if shouldUseForLoop(lastElement, statement, lastBodyElement) {
-				// Remove the last element since it is our init statement
-				initStatement := elements[len(elements)-1].(*Statement)
-				elements = elements[:len(elements)-1]
-
-				// Remove the last body element since it is our increment statement
-				incrementStatement := loopBody[len(loopBody)-1].(*Statement)
-				loopBody = loopBody[:len(loopBody)-1]
-
-				child = &ForLoop{
-					init:        initStatement,
-					conditional: statement,
-					increment:   incrementStatement,
-					body:        loopBody,
-				}
-			} else {
-				child = &WhileLoop{
-					conditional: statement,
-					body:        loopBody,
-				}
-			}
-
-			elements = append(elements, child)
-
-			// Back off by one since it will be incremented above
-			idx = blockEnd - 1
-			continue
-		}
-
-		// Check for do-while loop
-		blockEnd = isDoWhileLoop(idx, ops)
-		if blockEnd != -1 {
-			// Reset the stack
-			stack = []*OpGraph{}
-
-			// We need to modify the opcode so we don't infinitely find do-while loops
-			ops[blockEnd].opcode = OP_POP_STACK
-			ops[blockEnd].data = PopStackData{}
-
-			loopBody := ParseOperations(scope, ops[idx:blockEnd+1])
-
-			// Remove the last statement from the body, that should be our conditional
-			conditional := loopBody[len(loopBody)-1].(*Statement)
-			loopBody = loopBody[:len(loopBody)-1]
-
-			child := &DoWhileLoop{
-				conditional: conditional,
-				body:        loopBody,
-			}
-
-			elements = append(elements, child)
-
-			idx = blockEnd
-			continue
 		}
 
 		// Check for debug block
 		blockEnd = isDebugBlock(idx, ops)
 		if blockEnd != -1 {
-			child := &DebugBlock{
-				body: ParseOperations(scope, ops[idx+1:blockEnd]),
+
+			child := &DebugBlock{}
+
+			blockContext := &BlockContext{
+				breakOffset:    context.breakOffset,
+				continueOffset: context.continueOffset,
+				currentBlock:   child,
 			}
+
+			child.body = ParseOperations(scope, blockContext, ops, idx+1, blockEnd-1)
 
 			elements = append(elements, child)
 
@@ -1066,9 +1403,15 @@ func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 		blockEnd = isAtomicBlock(idx, ops)
 		if blockEnd != -1 {
 
-			child := &AtomicBlock{
-				body: ParseOperations(scope, ops[idx+1:blockEnd+1]),
+			child := &AtomicBlock{}
+
+			blockContext := &BlockContext{
+				breakOffset:    context.breakOffset,
+				continueOffset: context.continueOffset,
+				currentBlock:   child,
 			}
+
+			child.body = ParseOperations(scope, blockContext, ops, idx+1, blockEnd-1)
 
 			elements = append(elements, child)
 
@@ -1096,8 +1439,14 @@ func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 
 				everyBlock := &ScheduleEveryBlock{
 					interval: everyData.interval,
-					body:     ParseOperations(scope, ops[targetIdx+1:nextIdx]),
 				}
+
+				everyContext := &BlockContext{
+					continueOffset: context.continueOffset,
+					breakOffset:    &ops[blockEnd+1].offset,
+					currentBlock:   everyBlock,
+				}
+				everyBlock.body = ParseOperations(scope, everyContext, ops, targetIdx+1, nextIdx-1)
 
 				schedule.body = append(schedule.body, everyBlock)
 
@@ -1111,7 +1460,55 @@ func ParseOperations(scope *Scope, ops []Operation) []BlockElement {
 			continue
 		}
 
-		// TODO: Check for different child block types here
+		// Check for switch block
+		switchBlock, blockEnd := isSwitchBlock(scope, context, idx, ops)
+		if switchBlock != nil {
+			elements = append(elements, switchBlock)
+
+			idx = blockEnd - 1
+			continue
+		}
+
+		// Check for potential return/break/continue statement
+		if op.opcode == OP_JUMP {
+			jumpData := op.data.(JumpData)
+			if jumpData.offset == scope.functionEndOffset {
+				if len(stack) > 0 {
+					retString := "return "
+					last := len(stack) - 1
+					child := stack[last]
+					stack = stack[:last]
+					node.children = append(node.children, child)
+					node.code = &retString
+				} else {
+					retString := "return"
+					node.code = &retString
+				}
+				statement = &Statement{
+					graph: node,
+				}
+			} else if context.breakOffset != nil && jumpData.offset == *context.breakOffset { //else if jumpData.offset > ops[len(ops)-1].offset {
+				breakString := "break"
+				node.code = &breakString
+
+				statement = &Statement{
+					graph: node,
+				}
+			} else if context.continueOffset != nil && jumpData.offset == *context.continueOffset { // else if jumpData.offset < ops[0].offset {
+				continueString := "continue"
+				node.code = &continueString
+
+				statement = &Statement{
+					graph: node,
+				}
+			} else if context.IsCurrentBlockIfBlock() && idx == maxOpIdx && jumpData.offset > op.offset {
+				// Flag this as being the jump past the else block
+				statement.graph.FlagAsElseJump()
+			} else {
+				fmt.Printf("ERROR: Unhandled jump at offset 0x%08X\n", op.offset)
+				os.Exit(1)
+			}
+		}
 
 		if statement != nil {
 			elements = append(elements, statement)

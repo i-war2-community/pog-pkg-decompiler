@@ -9,8 +9,9 @@ import (
 const PROTOTYPE_PREFIX = "prototype"
 
 type FunctionParameter struct {
-	typeName      string
-	parameterName string
+	typeName       string
+	parameterName  string
+	potentialTypes map[string]bool
 }
 
 type FunctionDeclaration struct {
@@ -41,6 +42,13 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 	for idx := range fd.scope.variables {
 		v := &fd.scope.variables[idx]
 		possibleTypes := v.GetPossibleTypes()
+
+		if idx < int(fd.scope.localVariableIndexOffset) {
+			for key := range (*fd.declaration.parameters)[idx].potentialTypes {
+				possibleTypes[key] = true
+			}
+		}
+
 		if len(possibleTypes) == 1 {
 			for key := range possibleTypes {
 				if v.typeName != key {
@@ -66,6 +74,13 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 
 			// Find the most basic type of all those assigned
 			assignedTypes := v.GetAssignedTypes()
+
+			// If this is a function parameter, add the types that were assigned to it
+			if idx < int(fd.scope.localVariableIndexOffset) {
+				for key := range (*fd.declaration.parameters)[idx].potentialTypes {
+					assignedTypes = append(assignedTypes, key)
+				}
+			}
 
 			if len(assignedTypes) == 0 {
 				continue
@@ -94,13 +109,14 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 				}
 			}
 		}
+	}
 
-		// Copy over parameter types from their respective scope variable to the function declaration
-		if idx < int(fd.scope.localVariableIndexOffset) && v.typeName != UNKNOWN_TYPE {
-			param := &(*fd.declaration.parameters)[idx]
-			if param.typeName == UNKNOWN_TYPE {
-				param.typeName = v.typeName
-			}
+	// Copy over parameter types from their respective scope variable to the function declaration
+	for idx := 0; idx < int(fd.scope.localVariableIndexOffset); idx++ {
+		v := &fd.scope.variables[idx]
+		param := &(*fd.declaration.parameters)[idx]
+		if v.typeName != UNKNOWN_TYPE {
+			param.typeName = v.typeName
 		}
 	}
 
@@ -130,6 +146,10 @@ func (fd *FunctionDefinition) RenderPrototype(writer CodeWriter) {
 func (fd *FunctionDefinition) isLocalVariableAssignment(statement *Statement) *Variable {
 	op1 := statement.graph
 
+	if len(op1.children) == 0 {
+		return nil
+	}
+
 	op2 := op1.children[0]
 
 	// Skip over any OP_UNKNOWN_3C we hit
@@ -147,7 +167,7 @@ func (fd *FunctionDefinition) isLocalVariableAssignment(statement *Statement) *V
 func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	if OUTPUT_ASSEMBLY {
-		PrintFunctionAssembly(fd.declaration, fd.startingIndex, fd.initialOffset, writer)
+		//PrintFunctionAssembly(fd.declaration, fd.startingIndex, fd.initialOffset, writer)
 	}
 
 	// Write the function header
@@ -170,6 +190,8 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 			} else {
 				break
 			}
+		} else {
+			break
 		}
 	}
 
@@ -249,8 +271,8 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 	}
 
 	// Carve out the package and function name
-	result.pkg = parts[0]
-	result.name = parts[1]
+	result.pkg = strings.TrimSpace(parts[0])
+	result.name = strings.TrimSpace(parts[1])
 
 	// Parse the parameters
 	if len(parameterList) > 0 {
@@ -268,8 +290,9 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 				return nil
 			}
 			p := FunctionParameter{
-				typeName:      parts[0],
-				parameterName: parts[1],
+				typeName:       parts[0],
+				parameterName:  parts[1],
+				potentialTypes: map[string]bool{},
 			}
 			parameters = append(parameters, p)
 		}
@@ -361,6 +384,9 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 }
 
 func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) (int, *FunctionDefinition) {
+	if OUTPUT_ASSEMBLY {
+		PrintFunctionAssembly(declaration, startingIndex, initialOffset, writer)
+	}
 	definition := &FunctionDefinition{
 		startingIndex: startingIndex,
 		initialOffset: initialOffset,
@@ -415,7 +441,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		if OPERATIONS[idx].opcode == OP_FUNCTION_END {
 			idx--
 
-			if len(declaration.returnTypeName) == 0 && OPERATIONS[idx].opcode == OP_UNKNOWN_3C && OPERATIONS[idx-1].opcode == OP_LITERAL_ZERO {
+			if (len(declaration.returnTypeName) == 0) && OPERATIONS[idx].opcode == OP_UNKNOWN_3C && OPERATIONS[idx-1].opcode == OP_LITERAL_ZERO {
 				idx--
 			}
 
@@ -452,8 +478,8 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	// Save off the end offset so we can detect return statements
 	definition.scope.functionEndOffset = functionEnd.offset
 
-	blockOps := OPERATIONS[startingIndex:endIdx]
-	definition.body = ParseOperations(definition.scope, blockOps)
+	blockOps := OPERATIONS[startingIndex : endIdx+1]
+	definition.body = ParseOperations(definition.scope, &BlockContext{}, blockOps, 0, len(blockOps)-1)
 
 	return endIdx, definition
 }

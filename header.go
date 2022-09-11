@@ -169,9 +169,6 @@ func parseInclude(path string) {
 	for fileScanner.Scan() {
 		result := fileScanner.Text()
 
-		// Now we need to remove any line comments
-		r, _ := regexp.Compile("(//.*\n)")
-
 		prototype := string(r.ReplaceAll([]byte(result), []byte{}))
 
 		prototype = strings.ReplaceAll(prototype, "\t", "")

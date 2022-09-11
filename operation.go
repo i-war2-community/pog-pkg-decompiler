@@ -32,6 +32,36 @@ func IsFunctionCall(operation *Operation) bool {
 	return false
 }
 
+func IsLiteralInteger(operation *Operation) bool {
+	switch operation.opcode {
+	case OP_LITERAL_ZERO, OP_LITERAL_ONE, OP_LITERAL_BYTE, OP_LITERAL_SHORT, OP_LITERAL_INT:
+		return true
+	}
+
+	return false
+}
+
+func GetLiteralIntegerValue(operation *Operation) int32 {
+	switch operation.opcode {
+	case OP_LITERAL_ZERO:
+		return 0
+
+	case OP_LITERAL_ONE:
+		return 1
+
+	case OP_LITERAL_BYTE:
+		return int32(operation.data.(LiteralByteData).value)
+
+	case OP_LITERAL_SHORT:
+		return int32(operation.data.(LiteralShortData).value)
+
+	case OP_LITERAL_INT:
+		return operation.data.(LiteralIntData).value
+
+	}
+	return -1
+}
+
 func RenderOperationCode(operation *Operation, scope *Scope) *string {
 	var result string
 	switch operation.opcode {
@@ -82,9 +112,13 @@ func RenderOperationCode(operation *Operation, scope *Scope) *string {
 		data := operation.data.(FunctionCallData)
 		result = data.declaration.GetScopedName()
 
-	case OP_TASK_CALL_LOCAL, OP_TASK_CALL_IMPORTED:
+	case OP_TASK_CALL_LOCAL:
 		data := operation.data.(FunctionCallData)
 		result = fmt.Sprintf("start %s", data.declaration.name)
+
+	case OP_TASK_CALL_IMPORTED:
+		data := operation.data.(FunctionCallData)
+		result = fmt.Sprintf("start %s", data.declaration.GetScopedName())
 
 	case OP_INT_EQUALS, OP_STRING_EQUALS:
 		result = "=="
@@ -103,6 +137,9 @@ func RenderOperationCode(operation *Operation, scope *Scope) *string {
 
 	case OP_INT_LT_EQUALS, OP_FLT_LT_EQUALS:
 		result = "<="
+
+	case OP_INT_NEG, OP_FLT_NEG:
+		result = "-"
 
 	case OP_INT_ADD, OP_FLT_ADD:
 		result = "+"

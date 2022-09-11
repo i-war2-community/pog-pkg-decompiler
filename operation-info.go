@@ -522,6 +522,7 @@ func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
 				p := &params[ii]
 				p.typeName = UNKNOWN_TYPE
 				p.parameterName = fmt.Sprintf("param_%d", ii)
+				p.potentialTypes = map[string]bool{}
 			}
 			declaration.parameters = &params
 		}
@@ -549,6 +550,7 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 				p := &params[ii]
 				p.typeName = UNKNOWN_TYPE
 				p.parameterName = fmt.Sprintf("param_%d", ii)
+				p.potentialTypes = map[string]bool{}
 			}
 			declaration.parameters = &params
 		}

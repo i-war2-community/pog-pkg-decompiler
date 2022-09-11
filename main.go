@@ -35,15 +35,6 @@ type SectionHeader struct {
 func sortPackageImports(imports []string) []string {
 	results := []string{}
 
-	// copy(results, imports)
-
-	// sort.Slice(results, func(a, b int) bool {
-	// 	pkgA := PACKAGES[strings.ToLower(results[a])]
-	// 	pkgB := PACKAGES[strings.ToLower(results[b])]
-
-	// 	return pkgB.DependsOn(pkgA.name)
-	// })
-
 	for _, imp := range imports {
 		inserted := false
 		for idx, result := range results {
@@ -455,6 +446,4 @@ func main() {
 		fmt.Printf("Error: Failed to write file: %v", err)
 		return
 	}
-	fmt.Print(writer.String())
-
 }

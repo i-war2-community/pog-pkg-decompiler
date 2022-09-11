@@ -16,6 +16,11 @@ var HANDLE_MAP map[string]HandleTypeInfo = map[string]HandleTypeInfo{
 	},
 }
 
+func IsHandleType(typeName string) bool {
+	_, ok := HANDLE_MAP[typeName]
+	return ok
+}
+
 type Variable struct {
 	typeName        string
 	variableName    string
