@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"sort"
 	"strings"
 )
 
@@ -34,19 +33,33 @@ type SectionHeader struct {
 }
 
 func sortPackageImports(imports []string) []string {
-	results := make([]string, len(imports))
+	results := []string{}
 
-	copy(results, imports)
+	// copy(results, imports)
 
-	sort.Slice(results, func(a, b int) bool {
-		pkgA := PACKAGES[strings.ToLower(results[a])]
-		pkgB := PACKAGES[strings.ToLower(results[b])]
+	// sort.Slice(results, func(a, b int) bool {
+	// 	pkgA := PACKAGES[strings.ToLower(results[a])]
+	// 	pkgB := PACKAGES[strings.ToLower(results[b])]
 
-		_, dependsBA := pkgB.dependencies[pkgA.name]
-		_, dependsAB := pkgA.dependencies[pkgB.name]
+	// 	return pkgB.DependsOn(pkgA.name)
+	// })
 
-		return dependsBA && !dependsAB
-	})
+	for _, imp := range imports {
+		inserted := false
+		for idx, result := range results {
+			resultPkg := PACKAGES[strings.ToLower(result)]
+			if resultPkg.DependsOn(imp) {
+				results = append(results[:idx+1], results[idx:]...)
+				results[idx] = imp
+				inserted = true
+				break
+			}
+		}
+		if !inserted {
+			results = append(results, imp)
+		}
+
+	}
 
 	return results
 }

@@ -15,22 +15,65 @@ type PackageInfo struct {
 	name         string
 	functions    []*FunctionDeclaration
 	dependencies map[string]bool
+	handles      map[string]bool
 }
 
 var PACKAGES = map[string]*PackageInfo{}
 
+func (pkg *PackageInfo) dependsOnInternal(base string, visited map[string]bool) bool {
+
+	visited[fmt.Sprintf("%s->%s", pkg.name, base)] = true
+
+	for dependency := range pkg.dependencies {
+		if dependency == base {
+			return true
+		}
+
+		if depPkg, ok := PACKAGES[strings.ToLower(dependency)]; ok {
+			visitStr := fmt.Sprintf("%s->%s", depPkg.name, base)
+			_, already := visited[visitStr]
+			if already {
+				continue
+			}
+			if depPkg.dependsOnInternal(base, visited) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (pkg *PackageInfo) DependsOn(base string) bool {
+	visited := map[string]bool{}
+	return pkg.dependsOnInternal(base, visited)
+}
+
 func (pkg *PackageInfo) DetectDepdencies() {
+	// Check the package's handle definitions
+	for handle := range pkg.handles {
+		hnd := HANDLE_MAP[handle]
+		if base, ok := HANDLE_MAP[hnd.baseType]; ok {
+			pkg.dependencies[base.sourcePackage] = true
+		}
+	}
+
+	// Check the package's functions
 	for _, fnc := range pkg.functions {
 		// Check the return type
 		if handleInfo, ok := HANDLE_MAP[fnc.returnTypeName]; ok {
-			pkg.dependencies[handleInfo.sourcePackage] = true
+			if handleInfo.sourcePackage != pkg.name {
+				pkg.dependencies[handleInfo.sourcePackage] = true
+			}
 		}
 
 		// Check the parameters
 		if fnc.parameters != nil {
 			for _, p := range *fnc.parameters {
 				if handleInfo, ok := HANDLE_MAP[p.typeName]; ok {
-					pkg.dependencies[handleInfo.sourcePackage] = true
+					if handleInfo.sourcePackage != pkg.name {
+						pkg.dependencies[handleInfo.sourcePackage] = true
+					}
 				}
 			}
 		}
@@ -93,6 +136,7 @@ func parseInclude(path string) {
 		name:         packageName,
 		functions:    []*FunctionDeclaration{},
 		dependencies: map[string]bool{},
+		handles:      map[string]bool{},
 	}
 	PACKAGES[strings.ToLower(packageName)] = &packageInfo
 
@@ -111,10 +155,12 @@ func parseInclude(path string) {
 	for ii := range all {
 		handle := string(all[ii][len("handle") : len(all[ii])-1])
 		parts := strings.Split(handle, ":")
-		HANDLE_MAP[strings.TrimSpace(parts[0])] = HandleTypeInfo{
+		typeName := strings.TrimSpace(parts[0])
+		HANDLE_MAP[typeName] = HandleTypeInfo{
 			baseType:      strings.TrimSpace(parts[1]),
 			sourcePackage: packageName,
 		}
+		packageInfo.handles[typeName] = true
 	}
 
 	fileScanner := bufio.NewScanner(bytes.NewReader(contents))
@@ -134,6 +180,9 @@ func parseInclude(path string) {
 
 		declaration := AddFunctionDeclarationFromPrototype(prototype)
 		if declaration != nil {
+			if len(declaration.pkg) > 0 {
+				packageInfo.name = declaration.pkg
+			}
 			packageInfo.functions = append(packageInfo.functions, declaration)
 		}
 	}

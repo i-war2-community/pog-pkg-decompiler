@@ -13,6 +13,7 @@ const UNKNOWN_TYPE = "UNKNOWN"
 type BlockElement interface {
 	Render(writer CodeWriter)
 	IsBlock() bool
+	RendersAsBlock() bool
 	ResolveTypes(scope *Scope)
 }
 
@@ -88,6 +89,11 @@ func (og *OpGraph) GetOffsetRange() (uint32, uint32) {
 }
 
 func (og *OpGraph) ResolveTypes(scope *Scope) {
+
+	noneCode := "none"
+	trueCode := "true"
+	falseCode := "false"
+
 	for idx := range og.children {
 		og.children[idx].ResolveTypes(scope)
 	}
@@ -120,20 +126,20 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				switch child.operation.opcode {
 				case OP_LITERAL_ZERO:
 					if param.typeName == "bool" {
-						boolCode := "false"
-						child.code = &boolCode
+						child.code = &falseCode
+					} else if _, ok := HANDLE_MAP[param.typeName]; ok {
+						child.code = &noneCode
 					}
 
 				case OP_LITERAL_ONE:
 					if param.typeName == "bool" {
-						boolCode := "true"
-						child.code = &boolCode
+						child.code = &trueCode
 					}
 
 				case OP_VARIABLE_READ:
 					child.typeName = param.typeName
 					varData := child.operation.data.(VariableReadData)
-					scope.variables[varData.index].possibleTypes[param.typeName] = true
+					scope.variables[varData.index].referencedTypes[param.typeName] = true
 				}
 			}
 		}
@@ -141,8 +147,27 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	case OP_LOGICAL_AND, OP_LOGICAL_OR, OP_LOGICAL_NOT:
 		og.typeName = "bool"
 
-	case OP_INT_EQUALS, OP_INT_NOT_EQUALS, OP_INT_GT, OP_INT_LT, OP_INT_GT_EQUALS, OP_INT_LT_EQUALS:
+	case OP_INT_NOT_EQUALS, OP_INT_GT, OP_INT_LT, OP_INT_GT_EQUALS, OP_INT_LT_EQUALS:
 		og.typeName = "bool"
+
+	case OP_INT_EQUALS:
+		og.typeName = "bool"
+
+		child1 := og.children[0]
+		child2 := og.children[1]
+
+		// We need to do a special check here to see if we are comparing a handle to "none", which gets compiled down to a zero
+		if child1.operation.opcode == OP_CAST_HANDLE_TO_INT {
+			if child2.operation.opcode == OP_LITERAL_ZERO {
+				child2.code = &noneCode
+			}
+		}
+
+		if child2.operation.opcode == OP_CAST_HANDLE_TO_INT {
+			if child1.operation.opcode == OP_LITERAL_ZERO {
+				child1.code = &noneCode
+			}
+		}
 
 	case OP_FLT_GT, OP_FLT_LT, OP_FLT_GT_EQUALS, OP_FLT_LT_EQUALS:
 		og.typeName = "bool"
@@ -172,9 +197,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			childType = "bool"
 			// If we are assigning literal true or literal false
 			if scope.variables[varData.index].typeName == "bool" {
-				boolStr := "false"
+				boolStr := falseCode
 				if og.children[0].operation.opcode == OP_LITERAL_ONE {
-					boolStr = "true"
+					boolStr = trueCode
 				}
 
 				og.children[0].code = &boolStr
@@ -183,7 +208,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 		og.typeName = childType
 		if og.typeName != UNKNOWN_TYPE {
-			scope.variables[varData.index].possibleTypes[og.typeName] = true
+			scope.variables[varData.index].assignedTypes[og.typeName] = true
 		}
 
 	case OP_JUMP:
@@ -204,7 +229,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		if len(og.children) == 1 && og.children[0].operation.opcode == OP_VARIABLE_READ {
 			child := og.children[0]
 			varData := child.operation.data.(VariableReadData)
-			scope.variables[varData.index].possibleTypes["bool"] = true
+			scope.variables[varData.index].referencedTypes["bool"] = true
 		}
 
 	default:
@@ -277,17 +302,21 @@ func (s *Statement) IsBlock() bool {
 	return false
 }
 
+func (s *Statement) RendersAsBlock() bool {
+	return false
+}
+
 func (s *Statement) ResolveTypes(scope *Scope) {
 	s.graph.ResolveTypes(scope)
 }
 
 func shouldHaveNewlineBetween(element1 BlockElement, element2 BlockElement) bool {
-	if element1.IsBlock() && element2.IsBlock() {
+	if element1.RendersAsBlock() && element2.RendersAsBlock() {
 		_, isIf := element1.(*IfBlock)
 		_, isElse := element2.(*ElseBlock)
 		return !(isIf && isElse)
 	}
-	if !element1.IsBlock() && !element2.IsBlock() {
+	if !element1.RendersAsBlock() && !element2.RendersAsBlock() {
 		return false
 	}
 
@@ -344,6 +373,10 @@ func (ib *IfBlock) IsBlock() bool {
 	return true
 }
 
+func (ib *IfBlock) RendersAsBlock() bool {
+	return true
+}
+
 func (ib *IfBlock) ResolveTypes(scope *Scope) {
 	ib.conditional.ResolveTypes(scope)
 	ResolveTypes(scope, ib.body)
@@ -392,6 +425,10 @@ func (eb *ElseBlock) IsBlock() bool {
 	return true
 }
 
+func (eb *ElseBlock) RendersAsBlock() bool {
+	return true
+}
+
 func (eb *ElseBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, eb.body)
 }
@@ -424,6 +461,13 @@ func (db *DebugBlock) IsBlock() bool {
 	return true
 }
 
+func (db *DebugBlock) RendersAsBlock() bool {
+	if len(db.body) == 1 {
+		return db.body[0].RendersAsBlock()
+	}
+	return true
+}
+
 func (db *DebugBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
 }
@@ -448,6 +492,10 @@ func (db *AtomicBlock) Render(writer CodeWriter) {
 }
 
 func (db *AtomicBlock) IsBlock() bool {
+	return true
+}
+
+func (db *AtomicBlock) RendersAsBlock() bool {
 	return true
 }
 
@@ -478,6 +526,10 @@ func (db *ScheduleBlock) IsBlock() bool {
 	return true
 }
 
+func (db *ScheduleBlock) RendersAsBlock() bool {
+	return true
+}
+
 func (db *ScheduleBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
 }
@@ -503,6 +555,10 @@ func (eb *ScheduleEveryBlock) Render(writer CodeWriter) {
 }
 
 func (db *ScheduleEveryBlock) IsBlock() bool {
+	return true
+}
+
+func (db *ScheduleEveryBlock) RendersAsBlock() bool {
 	return true
 }
 
@@ -535,6 +591,10 @@ func (wl *WhileLoop) IsBlock() bool {
 	return true
 }
 
+func (wl *WhileLoop) RendersAsBlock() bool {
+	return true
+}
+
 func (wl *WhileLoop) ResolveTypes(scope *Scope) {
 	wl.conditional.ResolveTypes(scope)
 	ResolveTypes(scope, wl.body)
@@ -557,12 +617,17 @@ func (wl *DoWhileLoop) Render(writer CodeWriter) {
 
 	// Write out the bottom of the block
 	writer.PopIndent()
-	writer.Append("} while ( ")
+	writer.Append("}\n")
+	writer.Append("while ( ")
 	wl.conditional.Render(writer)
 	writer.Append(" );\n")
 }
 
 func (wl *DoWhileLoop) IsBlock() bool {
+	return true
+}
+
+func (wl *DoWhileLoop) RendersAsBlock() bool {
 	return true
 }
 
@@ -599,6 +664,10 @@ func (fl *ForLoop) Render(writer CodeWriter) {
 }
 
 func (fl *ForLoop) IsBlock() bool {
+	return true
+}
+
+func (fl *ForLoop) RendersAsBlock() bool {
 	return true
 }
 

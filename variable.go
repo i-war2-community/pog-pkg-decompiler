@@ -6,18 +6,47 @@ type HandleTypeInfo struct {
 }
 
 var HANDLE_MAP map[string]HandleTypeInfo = map[string]HandleTypeInfo{
-	"htask": HandleTypeInfo{
+	"htask": {
 		baseType:      "hobject",
+		sourcePackage: "__system",
+	},
+	"hobject": {
+		baseType:      "",
 		sourcePackage: "__system",
 	},
 }
 
 type Variable struct {
-	typeName      string
-	variableName  string
-	stackIndex    uint32
-	possibleTypes map[string]bool
-	refCount      int
+	typeName        string
+	variableName    string
+	stackIndex      uint32
+	assignedTypes   map[string]bool
+	referencedTypes map[string]bool
+	refCount        int
+}
+
+func (v Variable) GetPossibleTypes() map[string]bool {
+	result := map[string]bool{}
+
+	for k, v := range v.assignedTypes {
+		result[k] = v
+	}
+
+	for k, v := range v.referencedTypes {
+		result[k] = v
+	}
+
+	return result
+}
+
+func (v Variable) GetAssignedTypes() []string {
+	result := []string{}
+
+	for k := range v.assignedTypes {
+		result = append(result, k)
+	}
+
+	return result
 }
 
 type Scope struct {
