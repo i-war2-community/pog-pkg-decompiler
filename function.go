@@ -496,6 +496,26 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		os.Exit(1)
 	}
 
+	// Check for out of bounds variable access
+	for idx := startingIndex; idx < len(OPERATIONS); idx++ {
+		op := &OPERATIONS[idx]
+		switch op.opcode {
+		case OP_VARIABLE_READ:
+			varData := op.data.(VariableReadData)
+			if varData.index >= uint32(len(definition.scope.variables)) {
+				fmt.Printf("ERROR: Function %s tries to reference more variables than were declared, skipping.\n", declaration.GetScopedName())
+				return endIdx, definition
+			}
+
+		case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+			varData := op.data.(VariableWriteData)
+			if varData.index >= uint32(len(definition.scope.variables)) {
+				fmt.Printf("ERROR: Function %s tries to reference more variables than were declared, skipping.\n", declaration.GetScopedName())
+				return endIdx, definition
+			}
+		}
+	}
+
 	// Save off the end offset so we can detect return statements
 	definition.scope.functionEndOffset = functionEnd.offset
 

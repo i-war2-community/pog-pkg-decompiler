@@ -206,9 +206,9 @@ func parseInclude(path string) {
 	for fileScanner.Scan() {
 		result := fileScanner.Text()
 
-		prototype := strings.ReplaceAll(result, "\t", "")
-		prototype = strings.ReplaceAll(prototype, "\r", "")
-		prototype = strings.ReplaceAll(prototype, "\n", "")
+		prototype := strings.ReplaceAll(result, "\t", " ")
+		prototype = strings.ReplaceAll(prototype, "\r", " ")
+		prototype = strings.ReplaceAll(prototype, "\n", " ")
 
 		declaration := AddFunctionDeclarationFromPrototype(prototype)
 		if declaration != nil {

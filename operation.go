@@ -169,6 +169,12 @@ func RenderOperationCode(operation *Operation, scope *Scope) *string {
 	case OP_LOGICAL_NOT:
 		result = "!"
 
+	case OP_BITWISE_AND:
+		result = "&"
+
+	case OP_BITWISE_OR:
+		result = "|"
+
 	case OP_UNKNOWN_3B:
 		result = ""
 
