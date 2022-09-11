@@ -252,10 +252,12 @@ func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error
 		//fmt.Printf("%s", name)
 		lookup, ok := PACKAGES[name]
 		if !ok {
-			fmt.Printf("ERROR: Exporting package '%s' not found in includes!", name)
-			os.Exit(1)
+			fmt.Printf("ERROR: Exporting package '%s' not found in includes!\n", name)
+			//os.Exit(1)
+		} else {
+			name = lookup.name
 		}
-		EXPORTING_PACKAGE = lookup.name
+		EXPORTING_PACKAGE = name
 
 	case "FEXP":
 		name, err := readString(file)
@@ -380,6 +382,23 @@ func readCodeSection(file *os.File, writer CodeWriter) error {
 	return nil
 }
 
+func resolveAllTypes() {
+	for {
+		resolveCount := 0
+		for ii := range DECOMPILED_FUNCS {
+			fnc := DECOMPILED_FUNCS[ii]
+			if fnc.declaration.parameters == nil {
+				//fmt.Printf("ERROR: Unreferenced exported function with no declaration in headers: %s, cannot determine parameter count.\n", fnc.declaration.GetScopedName())
+				continue
+			}
+			resolveCount += fnc.ResolveTypes()
+		}
+		if resolveCount == 0 {
+			break
+		}
+	}
+}
+
 func main() {
 	flag.StringVar(&INCLUDES_DIR, "includes", "", "The includes directory with package headers.")
 	flag.BoolVar(&OUTPUT_ASSEMBLY, "assembly", false, "Have the decompiler output the 'assembly' for each function as comments above the function.")
@@ -397,9 +416,11 @@ func main() {
 	f, err := os.Open(filename)
 
 	if err != nil {
-		fmt.Printf("Error: Failed to read file: %v", err)
+		fmt.Printf("Error: Failed to read file: %v\n", err)
 		return
 	}
+
+	fmt.Printf("Decompiling package: %s\n", filename)
 
 	if len(INCLUDES_DIR) > 0 {
 		LoadFunctionDeclarationsFromHeaders(INCLUDES_DIR)
@@ -432,15 +453,22 @@ func main() {
 	}
 
 	// Resolve types until no more are resolved
-	for {
-		resolveCount := 0
-		for ii := range DECOMPILED_FUNCS {
-			resolveCount += DECOMPILED_FUNCS[ii].ResolveTypes()
-		}
-		if resolveCount == 0 {
-			break
+	resolveAllTypes()
+
+	// If we finished resolving everything, but we still have some unknown function parameters, set them to int
+	for _, fnc := range FUNC_DECLARATIONS {
+		if fnc.parameters != nil {
+			for _, param := range *fnc.parameters {
+				if param.typeName == UNKNOWN_TYPE {
+					param.typeName = "int"
+					param.potentialTypes["int"] = true
+				}
+			}
 		}
 	}
+
+	// Resolve types one more time
+	resolveAllTypes()
 
 	// Fix functions with unknown return types
 	SetAllUnknownFunctionReturnTypesToVoid()
@@ -461,6 +489,11 @@ func main() {
 
 	// Render the functions
 	for ii := range DECOMPILED_FUNCS {
+		fnc := DECOMPILED_FUNCS[ii]
+		if fnc.declaration.parameters == nil {
+			fmt.Printf("ERROR: Unreferenced exported function with no declaration in headers '%s':, cannot determine parameter count and function will not be output.\n", fnc.declaration.GetScopedName())
+			continue
+		}
 		DECOMPILED_FUNCS[ii].Render(writer)
 	}
 

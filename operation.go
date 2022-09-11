@@ -68,12 +68,16 @@ func RenderOperationCode(operation *Operation, scope *Scope) *string {
 	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
 		writeData := operation.data.(VariableWriteData)
 		v := scope.GetVariableByStackIndex(writeData.index)
-		result = fmt.Sprintf("%s = ", v.variableName)
+		if v != nil {
+			result = fmt.Sprintf("%s = ", v.variableName)
+		}
 
 	case OP_VARIABLE_READ:
 		readData := operation.data.(VariableReadData)
 		v := scope.GetVariableByStackIndex(readData.index)
-		result = fmt.Sprint(v.variableName)
+		if v != nil {
+			result = fmt.Sprint(v.variableName)
+		}
 
 	case OP_LITERAL_ONE:
 		result = "1"

@@ -405,6 +405,9 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 }
 
 func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) (int, *FunctionDefinition) {
+	// if OUTPUT_ASSEMBLY {
+	// 	PrintFunctionAssembly(declaration, startingIndex, initialOffset, writer)
+	// }
 	definition := &FunctionDefinition{
 		startingIndex: startingIndex,
 		initialOffset: initialOffset,
@@ -459,7 +462,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		if OPERATIONS[idx].opcode == OP_FUNCTION_END {
 			idx--
 
-			if (len(declaration.returnTypeName) == 0) && OPERATIONS[idx].opcode == OP_UNKNOWN_3C && OPERATIONS[idx-1].opcode == OP_LITERAL_ZERO {
+			if OPERATIONS[idx].opcode == OP_UNKNOWN_3C && OPERATIONS[idx-1].opcode == OP_LITERAL_ZERO {
 				idx--
 			}
 

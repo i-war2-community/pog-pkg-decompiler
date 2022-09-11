@@ -195,14 +195,17 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1 := og.children[0]
 		child2 := og.children[1]
 
+		_, child1IsHandle := HANDLE_MAP[child1.typeName]
+		_, child2IsHandle := HANDLE_MAP[child2.typeName]
+
 		// We need to do a special check here to see if we are comparing a handle to "none", which gets compiled down to a zero
-		if child1.operation.opcode == OP_CAST_HANDLE_TO_INT {
+		if child1.operation.opcode == OP_CAST_HANDLE_TO_INT || child1IsHandle {
 			if child2.operation.opcode == OP_LITERAL_ZERO {
 				child2.code = &noneCode
 			}
 		}
 
-		if child2.operation.opcode == OP_CAST_HANDLE_TO_INT {
+		if child2.operation.opcode == OP_CAST_HANDLE_TO_INT || child2IsHandle {
 			if child1.operation.opcode == OP_LITERAL_ZERO {
 				child1.code = &noneCode
 			}
@@ -232,7 +235,14 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		childType := og.children[0].typeName
 
 		switch og.children[0].operation.opcode {
-		case OP_LITERAL_ZERO, OP_LITERAL_ONE:
+		case OP_LITERAL_ZERO:
+			_, isHandle := HANDLE_MAP[scope.variables[varData.index].typeName]
+			if isHandle {
+				og.children[0].code = &noneCode
+				break
+			}
+			fallthrough
+		case OP_LITERAL_ONE:
 			childType = "bool"
 			// If we are assigning literal true or literal false
 			if scope.variables[varData.index].typeName == "bool" {

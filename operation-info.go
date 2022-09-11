@@ -530,6 +530,17 @@ func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
 			}
 			declaration.parameters = &params
 		}
+	} else {
+		if declaration.parameters == nil {
+			params := make([]FunctionParameter, parameterCount)
+			for ii := 0; ii < len(params); ii++ {
+				p := &params[ii]
+				p.typeName = UNKNOWN_TYPE
+				p.parameterName = fmt.Sprintf("param_%d", ii)
+				p.potentialTypes = map[string]bool{}
+			}
+			declaration.parameters = &params
+		}
 	}
 
 	return FunctionCallData{
@@ -558,6 +569,18 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 			}
 			declaration.parameters = &params
 		}
+	} else {
+		if declaration.parameters == nil {
+			params := make([]FunctionParameter, parameterCount)
+			for ii := 0; ii < len(params); ii++ {
+				p := &params[ii]
+				p.typeName = UNKNOWN_TYPE
+				p.parameterName = fmt.Sprintf("param_%d", ii)
+				p.potentialTypes = map[string]bool{}
+			}
+			declaration.parameters = &params
+		}
+		declaration.returnTypeName = "htask"
 	}
 
 	return FunctionCallData{
@@ -570,7 +593,14 @@ func ParseFunctionCallImported(data []byte, codeOffset uint32) OperationData {
 	parameterCount := binary.LittleEndian.Uint32(data[8:12])
 
 	if declaration.parameters == nil {
+		fmt.Printf("WARN: Failed to load function prototype for imported function %s\n", declaration.GetScopedName())
 		params := make([]FunctionParameter, parameterCount)
+		for ii := 0; ii < len(params); ii++ {
+			p := &params[ii]
+			p.typeName = UNKNOWN_TYPE
+			p.parameterName = fmt.Sprintf("param_%d", ii)
+			p.potentialTypes = map[string]bool{}
+		}
 		declaration.parameters = &params
 	}
 
