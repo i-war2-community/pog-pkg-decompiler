@@ -74,6 +74,7 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 
 			// Find the most basic type of all those assigned
 			assignedTypes := v.GetAssignedTypes()
+			referencedTypes := v.GetReferencedTypes()
 
 			// If this is a function parameter, add the types that were assigned to it
 			if idx < int(fd.scope.localVariableIndexOffset) {
@@ -82,24 +83,44 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 				}
 			}
 
-			if len(assignedTypes) == 0 {
-				continue
+			baseType := UNKNOWN_TYPE
+
+			if len(assignedTypes) > 0 {
+				baseType = assignedTypes[0]
+
+				for idx := 1; idx < len(assignedTypes); idx++ {
+					assigned := assignedTypes[idx]
+
+					if HandleIsDerivedFrom(assigned, baseType) {
+						continue
+					}
+					if HandleIsDerivedFrom(baseType, assigned) {
+						baseType = assigned
+						continue
+					}
+					baseType = UNKNOWN_TYPE
+					break
+				}
 			}
 
-			baseType := assignedTypes[0]
-
-			for idx := 1; idx < len(assignedTypes); idx++ {
-				assigned := assignedTypes[idx]
-
-				if HandleIsDerivedFrom(assigned, baseType) {
-					continue
+			if len(referencedTypes) > 0 {
+				if baseType == UNKNOWN_TYPE {
+					baseType = "hobject"
 				}
-				if HandleIsDerivedFrom(baseType, assigned) {
-					baseType = assigned
-					continue
+
+				for idx := 0; idx < len(referencedTypes); idx++ {
+					referenced := referencedTypes[idx]
+
+					if HandleIsDerivedFrom(baseType, referenced) {
+						continue
+					}
+					if HandleIsDerivedFrom(referenced, baseType) {
+						baseType = referenced
+						continue
+					}
+					baseType = UNKNOWN_TYPE
+					break
 				}
-				baseType = UNKNOWN_TYPE
-				break
 			}
 
 			if baseType != UNKNOWN_TYPE {
@@ -167,7 +188,7 @@ func (fd *FunctionDefinition) isLocalVariableAssignment(statement *Statement) *V
 func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	if OUTPUT_ASSEMBLY {
-		//PrintFunctionAssembly(fd.declaration, fd.startingIndex, fd.initialOffset, writer)
+		PrintFunctionAssembly(fd.declaration, fd.startingIndex, fd.initialOffset, writer)
 	}
 
 	// Write the function header
@@ -384,9 +405,6 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 }
 
 func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) (int, *FunctionDefinition) {
-	if OUTPUT_ASSEMBLY {
-		PrintFunctionAssembly(declaration, startingIndex, initialOffset, writer)
-	}
 	definition := &FunctionDefinition{
 		startingIndex: startingIndex,
 		initialOffset: initialOffset,

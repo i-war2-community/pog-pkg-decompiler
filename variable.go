@@ -8,11 +8,15 @@ type HandleTypeInfo struct {
 var HANDLE_MAP map[string]HandleTypeInfo = map[string]HandleTypeInfo{
 	"htask": {
 		baseType:      "hobject",
-		sourcePackage: "__system",
+		sourcePackage: SYSTEM_PACKAGE,
 	},
 	"hobject": {
 		baseType:      "",
-		sourcePackage: "__system",
+		sourcePackage: SYSTEM_PACKAGE,
+	},
+	"list": {
+		baseType:      "",
+		sourcePackage: "List",
 	},
 }
 
@@ -48,6 +52,16 @@ func (v Variable) GetAssignedTypes() []string {
 	result := []string{}
 
 	for k := range v.assignedTypes {
+		result = append(result, k)
+	}
+
+	return result
+}
+
+func (v Variable) GetReferencedTypes() []string {
+	result := []string{}
+
+	for k := range v.referencedTypes {
 		result = append(result, k)
 	}
 

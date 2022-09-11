@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+const SYSTEM_PACKAGE = "__system"
+
 type PackageInfo struct {
 	name         string
 	functions    []*FunctionDeclaration
@@ -45,16 +47,22 @@ func (pkg *PackageInfo) dependsOnInternal(base string, visited map[string]bool) 
 }
 
 func (pkg *PackageInfo) DependsOn(base string) bool {
-	visited := map[string]bool{}
-	return pkg.dependsOnInternal(base, visited)
+	_, exists := pkg.dependencies[base]
+	return exists
+	// visited := map[string]bool{}
+	// return pkg.dependsOnInternal(base, visited)
 }
 
 func (pkg *PackageInfo) DetectDepdencies() {
+	pkg.dependencies = map[string]bool{}
+
 	// Check the package's handle definitions
 	for handle := range pkg.handles {
 		hnd := HANDLE_MAP[handle]
 		if base, ok := HANDLE_MAP[hnd.baseType]; ok {
-			pkg.dependencies[base.sourcePackage] = true
+			if base.sourcePackage != SYSTEM_PACKAGE {
+				pkg.dependencies[base.sourcePackage] = true
+			}
 		}
 	}
 
@@ -62,7 +70,7 @@ func (pkg *PackageInfo) DetectDepdencies() {
 	for _, fnc := range pkg.functions {
 		// Check the return type
 		if handleInfo, ok := HANDLE_MAP[fnc.returnTypeName]; ok {
-			if handleInfo.sourcePackage != pkg.name {
+			if handleInfo.sourcePackage != pkg.name && handleInfo.sourcePackage != SYSTEM_PACKAGE {
 				pkg.dependencies[handleInfo.sourcePackage] = true
 			}
 		}
@@ -71,7 +79,7 @@ func (pkg *PackageInfo) DetectDepdencies() {
 		if fnc.parameters != nil {
 			for _, p := range *fnc.parameters {
 				if handleInfo, ok := HANDLE_MAP[p.typeName]; ok {
-					if handleInfo.sourcePackage != pkg.name {
+					if handleInfo.sourcePackage != pkg.name && handleInfo.sourcePackage != SYSTEM_PACKAGE {
 						pkg.dependencies[handleInfo.sourcePackage] = true
 					}
 				}
@@ -127,6 +135,47 @@ func removeComments(contents []byte) []byte {
 	return contents
 }
 
+func parsePackageHandles(contents []byte, pkg *PackageInfo) {
+	// Find all handle declarations
+	r, _ := regexp.Compile("(handle.*:.*;)")
+
+	all := r.FindAll(contents, -1)
+
+	for ii := range all {
+		handle := string(all[ii][len("handle") : len(all[ii])-1])
+		parts := strings.Split(handle, ":")
+		typeName := strings.TrimSpace(parts[0])
+		HANDLE_MAP[typeName] = HandleTypeInfo{
+			baseType:      strings.TrimSpace(parts[1]),
+			sourcePackage: pkg.name,
+		}
+		pkg.handles[typeName] = true
+	}
+}
+
+func parsePackageDependencies(contents []byte, pkg *PackageInfo) {
+	// Find all handle declarations
+	r, _ := regexp.Compile("(uses.*);")
+
+	all := r.FindAll(contents, -1)
+
+	// If we can't find any "uses" statements, we need to detect dependencies on our own
+	if len(all) == 0 {
+		pkg.dependencies = nil
+		return
+	}
+
+	for ii := range all {
+		depList := string(all[ii])
+		depList = strings.TrimPrefix(depList, "uses")
+		depList = strings.TrimSuffix(depList, ";")
+		deps := strings.Split(string(depList), ",")
+		for _, dep := range deps {
+			pkg.dependencies[strings.TrimSpace(dep)] = true
+		}
+	}
+}
+
 func parseInclude(path string) {
 
 	// Save off the package name with the proper upper and lower cases based on the filenames (for now, so far this seems to match)
@@ -148,20 +197,8 @@ func parseInclude(path string) {
 
 	contents = removeComments(contents)
 
-	r, _ := regexp.Compile("(handle.*:.*;)")
-
-	all := r.FindAll(contents, -1)
-
-	for ii := range all {
-		handle := string(all[ii][len("handle") : len(all[ii])-1])
-		parts := strings.Split(handle, ":")
-		typeName := strings.TrimSpace(parts[0])
-		HANDLE_MAP[typeName] = HandleTypeInfo{
-			baseType:      strings.TrimSpace(parts[1]),
-			sourcePackage: packageName,
-		}
-		packageInfo.handles[typeName] = true
-	}
+	parsePackageHandles(contents, &packageInfo)
+	parsePackageDependencies(contents, &packageInfo)
 
 	fileScanner := bufio.NewScanner(bytes.NewReader(contents))
 	fileScanner.Split(scanPrototypes)
@@ -169,9 +206,7 @@ func parseInclude(path string) {
 	for fileScanner.Scan() {
 		result := fileScanner.Text()
 
-		prototype := string(r.ReplaceAll([]byte(result), []byte{}))
-
-		prototype = strings.ReplaceAll(prototype, "\t", "")
+		prototype := strings.ReplaceAll(result, "\t", "")
 		prototype = strings.ReplaceAll(prototype, "\r", "")
 		prototype = strings.ReplaceAll(prototype, "\n", "")
 
@@ -192,6 +227,8 @@ func LoadFunctionDeclarationsFromHeaders(includeDir string) {
 func DetectPackageDependencies() {
 	// Look through every function in every package to see if they have parameters or return types from other packages
 	for _, pkg := range PACKAGES {
-		pkg.DetectDepdencies()
+		if pkg.dependencies == nil {
+			pkg.DetectDepdencies()
+		}
 	}
 }

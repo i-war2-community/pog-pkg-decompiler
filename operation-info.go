@@ -492,7 +492,11 @@ type FunctionCallData struct {
 }
 
 func (d FunctionCallData) String() string {
-	return fmt.Sprintf("%s %d", d.declaration.GetScopedName(), len(*d.declaration.parameters))
+	if d.declaration.parameters != nil {
+		return fmt.Sprintf("%s %d", d.declaration.GetScopedName(), len(*d.declaration.parameters))
+	} else {
+		return fmt.Sprintf("%s", d.declaration.GetScopedName())
+	}
 }
 
 func (d FunctionCallData) PushCount() int {

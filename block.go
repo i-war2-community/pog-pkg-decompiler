@@ -1135,7 +1135,8 @@ func isSwitchBlock(scope *Scope, context *BlockContext, idx int, ops []Operation
 							// We want to skip over this jump later
 							return parseSwitchBlock(scope, context, condStart, condEnd, idx+1, cases, ops), idx + 1
 						} else {
-							return nil, -1
+							// This might be the start of a second switch statement directly below this one
+							return parseSwitchBlock(scope, context, condStart, condEnd, idx, cases, ops), idx
 						}
 					}
 
@@ -1506,7 +1507,7 @@ func ParseOperations(scope *Scope, context *BlockContext, ops []Operation, minOp
 				statement.graph.FlagAsElseJump()
 			} else {
 				fmt.Printf("ERROR: Unhandled jump at offset 0x%08X\n", op.offset)
-				os.Exit(1)
+				//os.Exit(1)
 			}
 		}
 

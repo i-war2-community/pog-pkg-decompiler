@@ -39,7 +39,7 @@ func sortPackageImports(imports []string) []string {
 		inserted := false
 		for idx, result := range results {
 			resultPkg := PACKAGES[strings.ToLower(result)]
-			if resultPkg.DependsOn(imp) {
+			if resultPkg != nil && resultPkg.DependsOn(imp) {
 				results = append(results[:idx+1], results[idx:]...)
 				results[idx] = imp
 				inserted = true
@@ -61,7 +61,33 @@ func renderPackageImports(writer CodeWriter) {
 		return
 	}
 
-	imports := sortPackageImports(PACKAGE_IMPORTS)
+	// Add any missing dependency imports
+	imports := []string{}
+	import_map := map[string]bool{}
+
+	// First get our existing imports and map them
+	for _, pkgName := range PACKAGE_IMPORTS {
+		imports = append(imports, pkgName)
+		import_map[pkgName] = true
+	}
+
+	// Now check for any missing dependencies
+	for ii := 0; ii < len(imports); ii++ {
+		pkgName := imports[ii]
+		if pkg, ok := PACKAGES[strings.ToLower(pkgName)]; ok {
+			for dep := range pkg.dependencies {
+				_, exists := import_map[dep]
+				if !exists {
+					imports = append(imports, dep)
+					import_map[dep] = true
+				}
+			}
+		}
+	}
+
+	imports = sortPackageImports(imports)
+
+	importCount = len(imports)
 
 	writer.Append("uses ")
 	for ii := 0; ii < importCount; ii++ {
@@ -197,14 +223,15 @@ func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error
 			return err
 		}
 		//fmt.Printf("%s", name)
-		if name != "__system" {
+		if name != SYSTEM_PACKAGE {
 			_, ok := PACKAGES[name]
 			if !ok {
-				fmt.Printf("ERROR: Importing package '%s' not found in includes!", name)
-				os.Exit(1)
+				fmt.Printf("ERROR: Importing package '%s' not found in includes!\n", name)
+				//os.Exit(1)
+			} else {
+				// Get the package name with the correct upper and lower case letters
+				name = PACKAGES[name].name
 			}
-			// Get the package name with the correct upper and lower case letters
-			name = PACKAGES[name].name
 
 			PACKAGE_IMPORTS = append(PACKAGE_IMPORTS, name)
 		}
