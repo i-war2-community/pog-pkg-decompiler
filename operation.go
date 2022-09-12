@@ -43,22 +43,10 @@ func IsLiteralInteger(operation *Operation) bool {
 
 func GetLiteralIntegerValue(operation *Operation) int32 {
 	switch operation.opcode {
-	case OP_LITERAL_ZERO:
-		return 0
-
-	case OP_LITERAL_ONE:
-		return 1
-
-	case OP_LITERAL_BYTE:
-		return int32(operation.data.(LiteralByteData).value)
-
-	case OP_LITERAL_SHORT:
-		return int32(operation.data.(LiteralShortData).value)
-
-	case OP_LITERAL_INT:
-		return operation.data.(LiteralIntData).value
-
+	case OP_LITERAL_ZERO, OP_LITERAL_ONE, OP_LITERAL_BYTE, OP_LITERAL_SHORT, OP_LITERAL_INT:
+		return int32(operation.data.(LiteralInteger).GetValue())
 	}
+	fmt.Printf("ERROR: Trying to get integer value for non-integer type")
 	return -1
 }
 

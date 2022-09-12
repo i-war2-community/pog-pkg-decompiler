@@ -120,6 +120,31 @@ func renderFunctionExports(writer CodeWriter) {
 	writer.Append(";\n\n")
 }
 
+func renderEnums(writer CodeWriter) {
+	pkg, ok := PACKAGES[strings.ToLower(EXPORTING_PACKAGE)]
+	if ok {
+		for enumName := range pkg.enums {
+			writer.Appendf("enum %s\n", enumName)
+			writer.Append("{\n")
+			writer.PushIndent()
+			keys := []string{}
+			for k := range ENUM_MAP[enumName].nameToValue {
+				keys = append(keys, k)
+			}
+			for ii, k := range keys {
+				writer.Appendf("%s = 0x%08X", k, ENUM_MAP[enumName].nameToValue[k])
+				if ii < len(keys)-1 {
+					writer.Append(",\n")
+				} else {
+					writer.Append("\n")
+				}
+			}
+			writer.PopIndent()
+			writer.Append("};\n\n")
+		}
+	}
+}
+
 func readString(file *os.File) (string, error) {
 	var result []byte
 	var err error = nil
@@ -427,7 +452,7 @@ func main() {
 	fmt.Printf("Decompiling package: %s\n", filename)
 
 	if len(INCLUDES_DIR) > 0 {
-		LoadFunctionDeclarationsFromHeaders(INCLUDES_DIR)
+		LoadDeclarationsFromHeaders(INCLUDES_DIR)
 	}
 
 	form, err := readSectionHeader(f)
@@ -486,6 +511,8 @@ func main() {
 	writer.Appendf("package %s;\n\n", EXPORTING_PACKAGE)
 	renderPackageImports(writer)
 	renderFunctionExports(writer)
+
+	renderEnums(writer)
 
 	// Render the prototypes
 	for ii := range DECOMPILED_FUNCS {

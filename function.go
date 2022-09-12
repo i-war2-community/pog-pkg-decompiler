@@ -20,6 +20,7 @@ type FunctionDeclaration struct {
 	returnTypeName      string
 	parameters          *[]FunctionParameter
 	possibleReturnTypes map[string]bool
+	autoDetectTypes     bool
 }
 
 var FUNC_DECLARATIONS map[string]*FunctionDeclaration = map[string]*FunctionDeclaration{}
@@ -128,6 +129,12 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 		possibleTypes := v.GetPossibleTypes()
 
 		if idx < int(fd.scope.localVariableIndexOffset) {
+
+			// If we had a proper function declaration, we shouldn't change our types
+			if !fd.declaration.autoDetectTypes {
+				continue
+			}
+
 			for key := range (*fd.declaration.parameters)[idx].potentialTypes {
 				possibleTypes[key] = true
 			}
@@ -164,6 +171,26 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 					resolvedCount++
 				}
 			} else {
+
+				// Check for enum type
+				enumTypeCount := 0
+				var enumType string
+
+				for typeName, _ := range possibleTypes {
+					if IsEnumType(typeName) {
+						enumTypeCount++
+						enumType = typeName
+					}
+				}
+
+				if enumTypeCount == 1 {
+					if v.typeName != enumType {
+						v.typeName = enumType
+						resolvedCount++
+					}
+					continue
+				}
+
 				if len(assignedTypes) == 1 {
 					if v.typeName != assignedTypes[0] {
 						v.typeName = assignedTypes[0]
@@ -190,37 +217,39 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 		}
 	}
 
-	// See if we can resolve the return type
-	if len(fd.declaration.possibleReturnTypes) == 1 {
-		for key := range fd.declaration.possibleReturnTypes {
-			if fd.declaration.returnTypeName != key {
-				fd.declaration.returnTypeName = key
-				resolvedCount++
+	if fd.declaration.autoDetectTypes {
+		// See if we can resolve the return type
+		if len(fd.declaration.possibleReturnTypes) == 1 {
+			for key := range fd.declaration.possibleReturnTypes {
+				if fd.declaration.returnTypeName != key {
+					fd.declaration.returnTypeName = key
+					resolvedCount++
+				}
+				break
 			}
-			break
-		}
-	} else if len(fd.declaration.possibleReturnTypes) > 1 {
+		} else if len(fd.declaration.possibleReturnTypes) > 1 {
 
-		possibleTypes := fd.declaration.possibleReturnTypes
+			possibleTypes := fd.declaration.possibleReturnTypes
 
-		// Check if they are handle types
-		types := []string{}
-		for possible := range possibleTypes {
-			types = append(types, possible)
-		}
-
-		baseType := findBaseTypeForAssignedTypes(types)
-
-		if baseType != UNKNOWN_TYPE {
-			if fd.declaration.returnTypeName != baseType {
-				fd.declaration.returnTypeName = baseType
-				resolvedCount++
+			// Check if they are handle types
+			types := []string{}
+			for possible := range possibleTypes {
+				types = append(types, possible)
 			}
-		} else {
-			bestType := pickBestNonHandleType(possibleTypes)
-			if fd.declaration.returnTypeName != bestType {
-				fd.declaration.returnTypeName = bestType
-				resolvedCount++
+
+			baseType := findBaseTypeForAssignedTypes(types)
+
+			if baseType != UNKNOWN_TYPE {
+				if fd.declaration.returnTypeName != baseType {
+					fd.declaration.returnTypeName = baseType
+					resolvedCount++
+				}
+			} else {
+				bestType := pickBestNonHandleType(possibleTypes)
+				if fd.declaration.returnTypeName != bestType {
+					fd.declaration.returnTypeName = bestType
+					resolvedCount++
+				}
 			}
 		}
 	}
@@ -309,6 +338,7 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 	result.pkg = pkg
 	result.name = name
 	result.possibleReturnTypes = map[string]bool{}
+	result.autoDetectTypes = true
 
 	// Check to see if we have this one already
 	if existing, ok := FUNC_DECLARATIONS[result.GetScopedName()]; ok {
@@ -323,6 +353,7 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 
 func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration {
 	result := new(FunctionDeclaration)
+	result.autoDetectTypes = false
 
 	if !strings.HasPrefix(prototype, PROTOTYPE_PREFIX) {
 		fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
@@ -444,10 +475,15 @@ func writeLocalVariableDeclarations(variables []Variable, assignments map[uint32
 		if assignment, ok := assignments[lv.stackIndex]; ok {
 			writer.Appendf("%s ", lv.typeName)
 			assignment.Render(writer)
-			writer.Append(";\n")
+			writer.Append(";")
 		} else {
-			writer.Appendf("%s %s;\n", lv.typeName, lv.variableName)
+			writer.Appendf("%s %s;", lv.typeName, lv.variableName)
 		}
+
+		if OUTPUT_ASSEMBLY {
+			writer.Appendf(" // ID: %d", lv.id)
+		}
+		writer.Append("\n")
 		written++
 	}
 

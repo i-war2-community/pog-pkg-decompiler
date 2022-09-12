@@ -79,6 +79,18 @@ func (v Variable) GetReferencedTypes() []string {
 	return result
 }
 
+type EnumTypeInfo struct {
+	nameToValue map[string]uint32
+	valueToName map[uint32]string
+}
+
+var ENUM_MAP map[string]EnumTypeInfo = map[string]EnumTypeInfo{}
+
+func IsEnumType(typeName string) bool {
+	_, ok := ENUM_MAP[typeName]
+	return ok
+}
+
 type Scope struct {
 	function                 *FunctionDeclaration
 	functionEndOffset        uint32
