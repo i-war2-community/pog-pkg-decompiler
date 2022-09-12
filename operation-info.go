@@ -559,7 +559,7 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 		FUNC_DEFINITION_MAP[offset] = declaration
 
 		if declaration.parameters == nil {
-			declaration.returnTypeName = "htask"
+			declaration.returnTypeName = "task"
 			params := make([]FunctionParameter, parameterCount)
 			for ii := 0; ii < len(params); ii++ {
 				p := &params[ii]
@@ -580,7 +580,7 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 			}
 			declaration.parameters = &params
 		}
-		declaration.returnTypeName = "htask"
+		declaration.returnTypeName = "task"
 	}
 
 	return FunctionCallData{

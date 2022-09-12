@@ -11,6 +11,7 @@ import (
 
 // Command line options
 var INCLUDES_DIR string
+var OUTPUT_FILE string
 var OUTPUT_ASSEMBLY bool
 
 var EXPORTING_PACKAGE string
@@ -252,7 +253,7 @@ func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error
 		//fmt.Printf("%s", name)
 		lookup, ok := PACKAGES[name]
 		if !ok {
-			fmt.Printf("ERROR: Exporting package '%s' not found in includes!\n", name)
+			fmt.Printf("ERROR: Exporting package '%s' not found in includes. Package name might be output with incorrect case!\n", name)
 			//os.Exit(1)
 		} else {
 			name = lookup.name
@@ -388,7 +389,6 @@ func resolveAllTypes() {
 		for ii := range DECOMPILED_FUNCS {
 			fnc := DECOMPILED_FUNCS[ii]
 			if fnc.declaration.parameters == nil {
-				//fmt.Printf("ERROR: Unreferenced exported function with no declaration in headers: %s, cannot determine parameter count.\n", fnc.declaration.GetScopedName())
 				continue
 			}
 			resolveCount += fnc.ResolveTypes()
@@ -401,6 +401,7 @@ func resolveAllTypes() {
 
 func main() {
 	flag.StringVar(&INCLUDES_DIR, "includes", "", "The includes directory with package headers.")
+	flag.StringVar(&OUTPUT_FILE, "output", "", "The file path to which the pog file will be written.")
 	flag.BoolVar(&OUTPUT_ASSEMBLY, "assembly", false, "Have the decompiler output the 'assembly' for each function as comments above the function.")
 	flag.Parse()
 
@@ -418,6 +419,10 @@ func main() {
 	if err != nil {
 		fmt.Printf("Error: Failed to read file: %v\n", err)
 		return
+	}
+
+	if len(OUTPUT_FILE) == 0 {
+		OUTPUT_FILE = fmt.Sprintf("%s.d.pog", filename)
 	}
 
 	fmt.Printf("Decompiling package: %s\n", filename)
@@ -452,13 +457,15 @@ func main() {
 		return
 	}
 
+	ResolveUndefinedFunctionElements()
+
 	// Resolve types until no more are resolved
 	resolveAllTypes()
 
 	// If we finished resolving everything, but we still have some unknown function parameters, set them to int
-	for _, fnc := range FUNC_DECLARATIONS {
-		if fnc.parameters != nil {
-			for _, param := range *fnc.parameters {
+	for _, fnc := range DECOMPILED_FUNCS {
+		if fnc.declaration.parameters != nil {
+			for _, param := range *fnc.declaration.parameters {
 				if param.typeName == UNKNOWN_TYPE {
 					param.typeName = "int"
 					param.potentialTypes["int"] = true
@@ -467,7 +474,8 @@ func main() {
 		}
 	}
 
-	// Resolve types one more time
+	// Resolve types one more time now that we have our functions better defined
+	resolveAllTypes()
 	resolveAllTypes()
 
 	// Fix functions with unknown return types
@@ -497,11 +505,9 @@ func main() {
 		DECOMPILED_FUNCS[ii].Render(writer)
 	}
 
-	output := fmt.Sprintf("%s.d.pog", filename)
-
 	results := writer.Bytes()
 
-	err = ioutil.WriteFile(output, results, 0644)
+	err = ioutil.WriteFile(OUTPUT_FILE, results, 0644)
 	if err != nil {
 		fmt.Printf("Error: Failed to write file: %v", err)
 		return

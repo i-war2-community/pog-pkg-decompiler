@@ -30,7 +30,91 @@ type FunctionDefinition struct {
 	body        []BlockElement
 
 	startingIndex int
+	endingIndex   int
 	initialOffset int64
+}
+
+func findBaseTypeForAssignedTypes(assignedTypes []string) string {
+	baseType := UNKNOWN_TYPE
+	if len(assignedTypes) > 0 {
+		for idx := 0; idx < len(assignedTypes); idx++ {
+			assigned := assignedTypes[idx]
+
+			if !IsHandleType(assigned) {
+				continue
+			}
+
+			if baseType == UNKNOWN_TYPE {
+				baseType = assigned
+				continue
+			}
+
+			if HandleIsDerivedFrom(assigned, baseType) {
+				continue
+			}
+			if HandleIsDerivedFrom(baseType, assigned) {
+				baseType = assigned
+				continue
+			}
+			baseType = UNKNOWN_TYPE
+			break
+		}
+		return baseType
+	}
+
+	return baseType
+}
+
+func findBaseTypeForReferencedTypes(referencedTypes []string, startingType string) string {
+	if len(referencedTypes) > 0 {
+		baseType := startingType
+
+		for idx := 0; idx < len(referencedTypes); idx++ {
+			referenced := referencedTypes[idx]
+
+			if !IsHandleType(referenced) {
+				continue
+			}
+
+			if baseType == UNKNOWN_TYPE {
+				baseType = referenced
+			}
+
+			if HandleIsDerivedFrom(baseType, referenced) {
+				continue
+			}
+			if HandleIsDerivedFrom(referenced, baseType) {
+				baseType = referenced
+				continue
+			}
+			baseType = UNKNOWN_TYPE
+			break
+		}
+		return baseType
+	}
+
+	return startingType
+}
+
+func pickBestNonHandleType(possibleTypes map[string]bool) string {
+	_, okInt := possibleTypes["int"]
+	_, okFloat := possibleTypes["float"]
+	_, okBool := possibleTypes["bool"]
+	if okInt && okBool {
+		return "int"
+	}
+	if okInt && okFloat {
+		return "float"
+	}
+	if okBool && okFloat {
+		return "float"
+	}
+	// TODO: Maybe remove this when we add enum support
+	if okInt {
+		return "int"
+	}
+
+	return UNKNOWN_TYPE
 }
 
 func (fd *FunctionDefinition) ResolveTypes() int {
@@ -59,73 +143,38 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 			}
 		} else if len(possibleTypes) > 1 {
 
-			// Check for int and bool being the possible types
-			if len(possibleTypes) == 2 {
-				_, okInt := possibleTypes["int"]
-				_, okBool := possibleTypes["bool"]
-				if okInt && okBool {
-					if v.typeName != "int" {
-						v.typeName = "int"
-						resolvedCount++
-					}
-					continue
-				}
-			}
-
 			// Find the most basic type of all those assigned
 			assignedTypes := v.GetAssignedTypes()
 			referencedTypes := v.GetReferencedTypes()
 
 			// If this is a function parameter, add the types that were assigned to it
 			if idx < int(fd.scope.localVariableIndexOffset) {
+				assignedTypes = []string{}
 				for key := range (*fd.declaration.parameters)[idx].potentialTypes {
 					assignedTypes = append(assignedTypes, key)
 				}
 			}
 
-			baseType := UNKNOWN_TYPE
-
-			if len(assignedTypes) > 0 {
-				baseType = assignedTypes[0]
-
-				for idx := 1; idx < len(assignedTypes); idx++ {
-					assigned := assignedTypes[idx]
-
-					if HandleIsDerivedFrom(assigned, baseType) {
-						continue
-					}
-					if HandleIsDerivedFrom(baseType, assigned) {
-						baseType = assigned
-						continue
-					}
-					baseType = UNKNOWN_TYPE
-					break
-				}
-			}
-
-			if len(referencedTypes) > 0 {
-				if baseType == UNKNOWN_TYPE {
-					baseType = "hobject"
-				}
-
-				for idx := 0; idx < len(referencedTypes); idx++ {
-					referenced := referencedTypes[idx]
-
-					if HandleIsDerivedFrom(baseType, referenced) {
-						continue
-					}
-					if HandleIsDerivedFrom(referenced, baseType) {
-						baseType = referenced
-						continue
-					}
-					baseType = UNKNOWN_TYPE
-					break
-				}
-			}
+			baseType := findBaseTypeForAssignedTypes(assignedTypes)
+			baseType = findBaseTypeForReferencedTypes(referencedTypes, baseType)
 
 			if baseType != UNKNOWN_TYPE {
 				if v.typeName != baseType {
 					v.typeName = baseType
+					resolvedCount++
+				}
+			} else {
+				if len(assignedTypes) == 1 {
+					if v.typeName != assignedTypes[0] {
+						v.typeName = assignedTypes[0]
+						resolvedCount++
+					}
+					continue
+				}
+				// Find the best possible non-handle type
+				bestType := pickBestNonHandleType(possibleTypes)
+				if v.typeName != bestType {
+					v.typeName = bestType
 					resolvedCount++
 				}
 			}
@@ -142,15 +191,37 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 	}
 
 	// See if we can resolve the return type
-	if fd.declaration.returnTypeName == UNKNOWN_TYPE {
-		if len(fd.declaration.possibleReturnTypes) == 1 {
-			for key := range fd.declaration.possibleReturnTypes {
+	if len(fd.declaration.possibleReturnTypes) == 1 {
+		for key := range fd.declaration.possibleReturnTypes {
+			if fd.declaration.returnTypeName != key {
 				fd.declaration.returnTypeName = key
 				resolvedCount++
-				break
 			}
-		} else if len(fd.declaration.possibleReturnTypes) > 1 {
-			fmt.Print("Too many possible return types")
+			break
+		}
+	} else if len(fd.declaration.possibleReturnTypes) > 1 {
+
+		possibleTypes := fd.declaration.possibleReturnTypes
+
+		// Check if they are handle types
+		types := []string{}
+		for possible := range possibleTypes {
+			types = append(types, possible)
+		}
+
+		baseType := findBaseTypeForAssignedTypes(types)
+
+		if baseType != UNKNOWN_TYPE {
+			if fd.declaration.returnTypeName != baseType {
+				fd.declaration.returnTypeName = baseType
+				resolvedCount++
+			}
+		} else {
+			bestType := pickBestNonHandleType(possibleTypes)
+			if fd.declaration.returnTypeName != bestType {
+				fd.declaration.returnTypeName = bestType
+				resolvedCount++
+			}
 		}
 	}
 
@@ -164,7 +235,7 @@ func (fd *FunctionDefinition) RenderPrototype(writer CodeWriter) {
 	writer.Append(";\n")
 }
 
-func (fd *FunctionDefinition) isLocalVariableAssignment(statement *Statement) *Variable {
+func (fd *FunctionDefinition) isLocalVariableInitialAssignment(statement *Statement) *Variable {
 	op1 := statement.graph
 
 	if len(op1.children) == 0 {
@@ -180,6 +251,13 @@ func (fd *FunctionDefinition) isLocalVariableAssignment(statement *Statement) *V
 
 	if op1.operation.opcode == OP_POP_STACK && (op2.operation.opcode == OP_VARIABLE_WRITE || op2.operation.opcode == OP_HANDLE_VARIABLE_WRITE) {
 		varData := op2.operation.data.(VariableWriteData)
+		references := op2.children[0].GetAllReferencedVariableIndices()
+		for idx := varData.index; idx < uint32(len(fd.scope.variables)); idx++ {
+			// If this variable assignment references itself or variables that are declared after it, it can't be an initial assignment statement
+			if _, ok := references[idx]; ok {
+				return nil
+			}
+		}
 		return &fd.scope.variables[varData.index]
 	}
 	return nil
@@ -204,7 +282,7 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 	for _, be := range fd.body {
 		if !be.IsBlock() {
 			statement := be.(*Statement)
-			variable := fd.isLocalVariableAssignment(statement)
+			variable := fd.isLocalVariableInitialAssignment(statement)
 			if variable != nil && int(variable.stackIndex) > endIdx {
 				assignments[variable.stackIndex] = statement
 				endIdx = int(variable.stackIndex)
@@ -218,7 +296,7 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	fd.body = fd.body[len(assignments):]
 
-	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, writer)
+	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, fd.declaration, writer)
 
 	RenderBlockElements(fd.body, writer)
 
@@ -324,7 +402,7 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 	}
 
 	if result.returnTypeName == "task" {
-		result.returnTypeName = "htask"
+		result.returnTypeName = "task"
 	}
 
 	result.possibleReturnTypes = map[string]bool{}
@@ -351,12 +429,16 @@ func (f *FunctionDeclaration) GetScopedName() string {
 	}
 }
 
-func writeLocalVariableDeclarations(variables []Variable, assignments map[uint32]*Statement, writer CodeWriter) {
+func writeLocalVariableDeclarations(variables []Variable, assignments map[uint32]*Statement, declaration *FunctionDeclaration, writer CodeWriter) {
 	written := 0
 	for ii := 0; ii < len(variables); ii++ {
 		lv := &variables[ii]
 		if lv.typeName == UNKNOWN_TYPE && lv.refCount == 0 {
 			lv.typeName = "int"
+		}
+
+		if lv.typeName == UNKNOWN_TYPE {
+			fmt.Printf("WARN: Failed to determine type for local variable %s in function %s\n", lv.variableName, declaration.GetScopedName())
 		}
 
 		if assignment, ok := assignments[lv.stackIndex]; ok {
@@ -379,8 +461,8 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 
 	if len(declaration.returnTypeName) > 0 {
 		returnType := declaration.returnTypeName
-		if returnType == "htask" {
-			returnType = "task"
+		if returnType == UNKNOWN_TYPE {
+			fmt.Printf("WARN: Failed to determine return type for function %s\n", declaration.GetScopedName())
 		}
 		sb.WriteString(fmt.Sprintf("%s ", returnType))
 	}
@@ -392,6 +474,9 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 		count := len(*declaration.parameters)
 		for ii := 0; ii < count; ii++ {
 			p := (*declaration.parameters)[ii]
+			if p.typeName == UNKNOWN_TYPE {
+				fmt.Printf("WARN: Failed to determine type for function parameter %s(%s)\n", declaration.GetScopedName(), p.parameterName)
+			}
 			sb.WriteString(fmt.Sprintf("%s %s", p.typeName, p.parameterName))
 			if ii < count-1 {
 				sb.WriteString(", ")
@@ -418,6 +503,65 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		},
 	}
 
+	var localVariableCount uint32 = 0
+
+	firstOp := OPERATIONS[startingIndex]
+	if firstOp.opcode == OP_PUSH_STACK_N {
+		localVariableCount = firstOp.data.(CountDataUInt32).count
+	}
+
+	// Try to detect the function parameters
+	if declaration.parameters == nil {
+		maxIndex := -1
+		hasSchedules := false
+
+		for idx := startingIndex; idx < len(OPERATIONS); idx++ {
+			op := &OPERATIONS[idx]
+			switch op.opcode {
+			case OP_FUNCTION_END:
+				// We are done, so skip to the end
+				idx = len(OPERATIONS)
+
+			case OP_VARIABLE_READ:
+				varData := op.data.(VariableReadData)
+				index := int(varData.index)
+				if index > maxIndex {
+					maxIndex = index
+				}
+
+			case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+				varData := op.data.(VariableWriteData)
+				index := int(varData.index)
+				if index > maxIndex {
+					maxIndex = index
+				}
+
+			case OP_SCHEDULE_START:
+				hasSchedules = true
+			}
+		}
+
+		parameterCount := (maxIndex - int(localVariableCount)) + 1
+
+		// This can happen if there are more local variables pushed on the stack than are actually referenced anywhere
+		if parameterCount < 0 {
+			parameterCount = 0
+		}
+
+		params := make([]FunctionParameter, parameterCount)
+		for ii := 0; ii < len(params); ii++ {
+			p := &params[ii]
+			p.typeName = UNKNOWN_TYPE
+			p.parameterName = fmt.Sprintf("param_%d", ii)
+			p.potentialTypes = map[string]bool{}
+		}
+		declaration.parameters = &params
+
+		if declaration.returnTypeName == "UNKNOWN" && hasSchedules {
+			declaration.returnTypeName = "task"
+		}
+	}
+
 	// Add the parameters from our function declaration to the scope variables
 	if declaration.parameters != nil {
 		for ii := 0; ii < len(*declaration.parameters); ii++ {
@@ -428,7 +572,9 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 				stackIndex:      uint32(ii),
 				assignedTypes:   map[string]bool{},
 				referencedTypes: map[string]bool{},
+				id:              VARIABLE_ID_COUNTER,
 			}
+			VARIABLE_ID_COUNTER++
 			definition.scope.variables = append(definition.scope.variables, v)
 		}
 
@@ -436,18 +582,18 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	}
 
 	// Check to see if there are local variables
-	firstOp := OPERATIONS[startingIndex]
-	if firstOp.opcode == OP_PUSH_STACK_N {
-		count := firstOp.data.(CountDataUInt32).count
+	if localVariableCount > 0 {
 		var ii uint32
-		for ii = 0; ii < count; ii++ {
+		for ii = 0; ii < localVariableCount; ii++ {
 			lv := Variable{
 				typeName:        UNKNOWN_TYPE,
 				variableName:    fmt.Sprintf("local_%d", ii),
 				stackIndex:      uint32(ii + definition.scope.localVariableIndexOffset),
 				assignedTypes:   map[string]bool{},
 				referencedTypes: map[string]bool{},
+				id:              VARIABLE_ID_COUNTER,
 			}
+			VARIABLE_ID_COUNTER++
 			definition.scope.variables = append(definition.scope.variables, lv)
 		}
 		// Skip over the local variable opcode
@@ -496,22 +642,29 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		os.Exit(1)
 	}
 
-	// Check for out of bounds variable access
-	for idx := startingIndex; idx < len(OPERATIONS); idx++ {
-		op := &OPERATIONS[idx]
-		switch op.opcode {
-		case OP_VARIABLE_READ:
-			varData := op.data.(VariableReadData)
-			if varData.index >= uint32(len(definition.scope.variables)) {
-				fmt.Printf("ERROR: Function %s tries to reference more variables than were declared, skipping.\n", declaration.GetScopedName())
-				return endIdx, definition
-			}
+	// Save off the ending index
+	definition.endingIndex = endIdx
 
-		case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
-			varData := op.data.(VariableWriteData)
-			if varData.index >= uint32(len(definition.scope.variables)) {
-				fmt.Printf("ERROR: Function %s tries to reference more variables than were declared, skipping.\n", declaration.GetScopedName())
-				return endIdx, definition
+	variableCount := uint32(len(definition.scope.variables))
+
+	// Check for out of bounds variable access
+	if declaration.parameters != nil {
+		for idx := startingIndex; idx < endIdx; idx++ {
+			op := &OPERATIONS[idx]
+			switch op.opcode {
+			case OP_VARIABLE_READ:
+				varData := op.data.(VariableReadData)
+				if varData.index >= variableCount {
+					fmt.Printf("ERROR: Function %s tries to reference variable at index %d while only %d were declared, skipping.\n", declaration.GetScopedName(), varData.index, variableCount)
+					return endIdx, definition
+				}
+
+			case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+				varData := op.data.(VariableWriteData)
+				if varData.index >= variableCount {
+					fmt.Printf("ERROR: Function %s tries to write to variable at index %d while only %d were declared, skipping.\n", declaration.GetScopedName(), varData.index, variableCount)
+					return endIdx, definition
+				}
 			}
 		}
 	}
@@ -526,7 +679,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 }
 
 func PrintFunctionAssembly(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) {
-	writer.Appendf("// ==================== START_FUNCTION %s\n", declaration.GetScopedName())
+	writer.Appendf("// ==================== START_FUNCTION %s\n", renderFunctionDefinitionHeader(declaration))
 	for idx := startingIndex; idx < len(OPERATIONS); idx++ {
 		operation := OPERATIONS[idx]
 		writer.Appendf("// 0x%08X ", operation.offset)
@@ -537,4 +690,14 @@ func PrintFunctionAssembly(declaration *FunctionDeclaration, startingIndex int, 
 			return
 		}
 	}
+}
+
+func ResolveUndefinedFunctionElements() {
+	// for _, fnc := range DECOMPILED_FUNCS {
+	// 	if fnc.declaration.parameters == nil {
+	// 		if len(fnc.scope.variables) == 0 {
+	// 			fnc.declaration.parameters = &[]FunctionParameter{}
+	// 		}
+	// 	}
+	// }
 }

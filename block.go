@@ -42,12 +42,41 @@ type OpGraph struct {
 	typeName  string
 }
 
+func (og *OpGraph) GetAllReferencedVariableIndices() map[uint32]bool {
+	result := map[uint32]bool{}
+	switch og.operation.opcode {
+	case OP_VARIABLE_READ:
+		varData := og.operation.data.(VariableReadData)
+		result[varData.index] = true
+
+	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+		varData := og.operation.data.(VariableWriteData)
+		result[varData.index] = true
+	}
+
+	for _, child := range og.children {
+		childResult := child.GetAllReferencedVariableIndices()
+		for k, v := range childResult {
+			result[k] = v
+		}
+	}
+
+	return result
+}
+
 func (og *OpGraph) String() string {
 	opInfo := OP_MAP[og.operation.opcode]
 	if og.operation.data != nil && len(og.operation.data.String()) > 0 {
 		return fmt.Sprintf(" %s[%s] ", opInfo.name, og.operation.data.String())
 	} else {
 		return fmt.Sprintf(" %s ", opInfo.name)
+	}
+}
+
+func (og *OpGraph) SetVariableReferenceType(scope *Scope, typeName string) {
+	if og.operation.opcode == OP_VARIABLE_READ {
+		varData := og.operation.data.(VariableReadData)
+		scope.variables[varData.index].AddReferencedType(typeName)
 	}
 }
 
@@ -126,11 +155,21 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	}
 
 	switch og.operation.opcode {
-	case OP_INT_ADD, OP_INT_SUB, OP_INT_MUL, OP_INT_DIV, OP_INT_MOD, OP_CAST_FLT_TO_INT, OP_BITWISE_AND, OP_BITWISE_OR, OP_INT_NEG, OP_LITERAL_BYTE, OP_LITERAL_SHORT, OP_LITERAL_INT:
+	case OP_CAST_FLT_TO_INT, OP_BITWISE_AND, OP_BITWISE_OR, OP_INT_NEG, OP_LITERAL_BYTE, OP_LITERAL_SHORT, OP_LITERAL_INT:
 		og.typeName = "int"
 
-	case OP_FLT_ADD, OP_FLT_SUB, OP_FLT_MUL, OP_FLT_DIV, OP_CAST_INT_TO_FLT, OP_FLT_NEG, OP_LITERAL_FLT:
+	case OP_INT_ADD, OP_INT_SUB, OP_INT_MUL, OP_INT_DIV, OP_INT_MOD:
+		og.typeName = "int"
+		og.children[0].SetVariableReferenceType(scope, "int")
+		og.children[1].SetVariableReferenceType(scope, "int")
+
+	case OP_CAST_INT_TO_FLT, OP_FLT_NEG, OP_LITERAL_FLT:
 		og.typeName = "float"
+
+	case OP_FLT_ADD, OP_FLT_SUB, OP_FLT_MUL, OP_FLT_DIV:
+		og.typeName = "float"
+		og.children[0].SetVariableReferenceType(scope, "float")
+		og.children[1].SetVariableReferenceType(scope, "float")
 
 	case OP_LITERAL_STRING:
 		og.typeName = "string"
@@ -138,7 +177,11 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	case OP_FUNCTION_CALL_IMPORTED, OP_TASK_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_LOCAL:
 		funcData := og.operation.data.(FunctionCallData)
 		if funcData.declaration.returnTypeName != UNKNOWN_TYPE {
-			og.typeName = funcData.declaration.returnTypeName
+			if funcData.declaration.returnTypeName == "task" {
+				og.typeName = "htask"
+			} else {
+				og.typeName = funcData.declaration.returnTypeName
+			}
 		}
 
 		if funcData.declaration.parameters != nil && len(*funcData.declaration.parameters) == len(og.children) {
@@ -161,6 +204,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				}
 
 				if param.typeName != UNKNOWN_TYPE {
+
+					child.SetVariableReferenceType(scope, param.typeName)
+
 					switch child.operation.opcode {
 					case OP_LITERAL_ZERO:
 						if param.typeName == "bool" {
@@ -173,11 +219,6 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 						if param.typeName == "bool" {
 							child.code = &trueCode
 						}
-
-					case OP_VARIABLE_READ:
-						child.typeName = param.typeName
-						varData := child.operation.data.(VariableReadData)
-						scope.variables[varData.index].referencedTypes[param.typeName] = true
 					}
 				}
 			}
@@ -188,6 +229,11 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 	case OP_INT_GT, OP_INT_LT, OP_INT_GT_EQUALS, OP_INT_LT_EQUALS:
 		og.typeName = "bool"
+		child1 := og.children[0]
+		child2 := og.children[1]
+
+		child1.SetVariableReferenceType(scope, "int")
+		child2.SetVariableReferenceType(scope, "int")
 
 	case OP_INT_EQUALS, OP_INT_NOT_EQUALS:
 		og.typeName = "bool"
@@ -195,24 +241,51 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1 := og.children[0]
 		child2 := og.children[1]
 
-		_, child1IsHandle := HANDLE_MAP[child1.typeName]
-		_, child2IsHandle := HANDLE_MAP[child2.typeName]
+		child1.SetVariableReferenceType(scope, "int")
+		child2.SetVariableReferenceType(scope, "int")
+
+		child1IsHandle := IsHandleType(child1.typeName)
+		child2IsHandle := IsHandleType(child2.typeName)
+
+		child1IsCast := child1.operation.opcode == OP_CAST_HANDLE_TO_INT
+		child2IsCast := child2.operation.opcode == OP_CAST_HANDLE_TO_INT
 
 		// We need to do a special check here to see if we are comparing a handle to "none", which gets compiled down to a zero
-		if child1.operation.opcode == OP_CAST_HANDLE_TO_INT || child1IsHandle {
+		if child1IsCast || child1IsHandle {
 			if child2.operation.opcode == OP_LITERAL_ZERO {
 				child2.code = &noneCode
 			}
 		}
 
-		if child2.operation.opcode == OP_CAST_HANDLE_TO_INT || child2IsHandle {
+		if child2IsCast || child2IsHandle {
 			if child1.operation.opcode == OP_LITERAL_ZERO {
 				child1.code = &noneCode
 			}
 		}
 
+		if child1IsHandle && child2.typeName == UNKNOWN_TYPE {
+			if child2IsCast {
+				child2.children[0].SetVariableReferenceType(scope, child1.typeName)
+			} else {
+				child2.SetVariableReferenceType(scope, child1.typeName)
+			}
+		}
+
+		if child2IsHandle && child1.typeName == UNKNOWN_TYPE {
+			if child1IsCast {
+				child1.children[0].SetVariableReferenceType(scope, child2.typeName)
+			} else {
+				child1.SetVariableReferenceType(scope, child2.typeName)
+			}
+		}
+
 	case OP_FLT_GT, OP_FLT_LT, OP_FLT_GT_EQUALS, OP_FLT_LT_EQUALS:
 		og.typeName = "bool"
+		child1 := og.children[0]
+		child2 := og.children[1]
+
+		child1.SetVariableReferenceType(scope, "float")
+		child2.SetVariableReferenceType(scope, "float")
 
 	case OP_STRING_EQUALS:
 		og.typeName = "bool"
@@ -226,9 +299,10 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
 		varData := og.operation.data.(VariableWriteData)
+		v := &scope.variables[varData.index]
 		// Add to the variable's ref count if this isn't just from a handle init
 		if og.children[0].operation.opcode != OP_HANDLE_INIT {
-			scope.variables[varData.index].refCount++
+			v.refCount++
 		}
 
 		// Copy over the type of our first child
@@ -236,16 +310,19 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 		switch og.children[0].operation.opcode {
 		case OP_LITERAL_ZERO:
-			_, isHandle := HANDLE_MAP[scope.variables[varData.index].typeName]
-			if isHandle {
+			if IsHandleType(v.typeName) {
 				og.children[0].code = &noneCode
 				break
 			}
 			fallthrough
 		case OP_LITERAL_ONE:
-			childType = "bool"
+			// It could be either of these really
+			v.AddAssignedType("bool")
+			v.AddAssignedType("int")
+
 			// If we are assigning literal true or literal false
-			if scope.variables[varData.index].typeName == "bool" {
+			if v.typeName == "bool" {
+				childType = "bool"
 				boolStr := falseCode
 				if og.children[0].operation.opcode == OP_LITERAL_ONE {
 					boolStr = trueCode
@@ -255,22 +332,33 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
-		og.typeName = childType
-		if og.typeName != UNKNOWN_TYPE {
-			scope.variables[varData.index].assignedTypes[og.typeName] = true
+		if childType != UNKNOWN_TYPE {
+			og.typeName = childType
+			if og.typeName != UNKNOWN_TYPE {
+				v.AddAssignedType(og.typeName)
+			}
+		} else if v.typeName != UNKNOWN_TYPE {
+			og.children[0].SetVariableReferenceType(scope, v.typeName)
 		}
 
 	case OP_JUMP:
 		if og.code != nil && strings.HasPrefix(*og.code, "return") {
-			if scope.function.returnTypeName == UNKNOWN_TYPE {
-				returnType := ""
-				if len(og.children) > 0 {
+			//if scope.function.returnTypeName == UNKNOWN_TYPE {
+			returnType := ""
+			if len(og.children) > 0 {
+				switch og.children[0].operation.opcode {
+				case OP_LITERAL_ZERO, OP_LITERAL_ONE:
+					scope.function.possibleReturnTypes["bool"] = true
+					scope.function.possibleReturnTypes["int"] = true
+				default:
 					returnType = og.children[0].typeName
+					if returnType != UNKNOWN_TYPE {
+						scope.function.possibleReturnTypes[returnType] = true
+					}
 				}
-				if returnType != UNKNOWN_TYPE {
-					scope.function.possibleReturnTypes[returnType] = true
-				}
-			} else {
+			}
+			//} else {
+			if scope.function.returnTypeName != UNKNOWN_TYPE {
 				if len(og.children) > 0 {
 					returnOp := og.children[0]
 					switch returnOp.operation.opcode {
@@ -288,14 +376,13 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 					}
 				}
 			}
+			//}
 		}
 
 	case OP_JUMP_IF_FALSE, OP_JUMP_IF_TRUE:
 		// If we have a variable read inside an if statement, we might have a bool
-		if len(og.children) == 1 && og.children[0].operation.opcode == OP_VARIABLE_READ {
-			child := og.children[0]
-			varData := child.operation.data.(VariableReadData)
-			scope.variables[varData.index].referencedTypes["bool"] = true
+		if len(og.children) == 1 {
+			og.children[0].SetVariableReferenceType(scope, "bool")
 		}
 
 	default:

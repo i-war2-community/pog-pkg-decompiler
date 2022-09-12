@@ -32,6 +32,17 @@ type Variable struct {
 	assignedTypes   map[string]bool
 	referencedTypes map[string]bool
 	refCount        int
+	id              int
+}
+
+var VARIABLE_ID_COUNTER int = 0
+
+func (v Variable) AddAssignedType(typeName string) {
+	v.assignedTypes[typeName] = true
+}
+
+func (v Variable) AddReferencedType(typeName string) {
+	v.referencedTypes[typeName] = true
 }
 
 func (v Variable) GetPossibleTypes() map[string]bool {

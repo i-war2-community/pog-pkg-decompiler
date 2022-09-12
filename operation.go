@@ -106,6 +106,7 @@ func RenderOperationCode(operation *Operation, scope *Scope) *string {
 		// TODO: This seems like an area that could cause a lot of trouble
 		s := strings.ReplaceAll(STRING_TABLE[data.index], "\n", `\n`)
 		s = strings.ReplaceAll(s, "\t", `\t`)
+		s = strings.ReplaceAll(s, `"`, `\"`)
 		result = fmt.Sprintf(`"%s"`, s)
 
 	case OP_FUNCTION_CALL_LOCAL:
