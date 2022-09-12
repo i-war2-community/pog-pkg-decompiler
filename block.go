@@ -90,6 +90,12 @@ func (og *OpGraph) SetPossibleType(scope *Scope, typeName string) {
 				}
 			}
 		}
+
+	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL:
+		fncData := og.operation.data.(FunctionCallData)
+		if IsEnumType(typeName) {
+			fncData.declaration.possibleReturnTypes[typeName] = true
+		}
 	}
 }
 
@@ -299,7 +305,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
-		if child1IsHandle && child2.typeName == UNKNOWN_TYPE {
+		if child1IsHandle {
 			if child2IsCast {
 				child2.children[0].SetPossibleType(scope, "hobject")
 			} else {
@@ -307,7 +313,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
-		if child2IsHandle && child1.typeName == UNKNOWN_TYPE {
+		if child2IsHandle {
 			if child1IsCast {
 				child1.children[0].SetPossibleType(scope, "hobject")
 			} else {
@@ -343,9 +349,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 		// Check for assigning an enum from a literal integer
 		if IsEnumType(v.typeName) {
-			if IsLiteralInteger(og.children[0].operation) {
-				og.children[0].SetPossibleType(scope, v.typeName)
-			}
+			og.children[0].SetPossibleType(scope, v.typeName)
 		}
 
 		// Copy over the type of our first child
@@ -404,17 +408,35 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			if scope.function.returnTypeName != UNKNOWN_TYPE {
 				if len(og.children) > 0 {
 					returnOp := og.children[0]
-					switch returnOp.operation.opcode {
-					case OP_LITERAL_ZERO:
-						if IsHandleType(scope.function.returnTypeName) {
-							returnOp.code = &noneCode
-						} else if scope.function.returnTypeName == "bool" {
-							returnOp.code = &falseCode
-						}
 
-					case OP_LITERAL_ONE:
-						if scope.function.returnTypeName == "bool" {
-							returnOp.code = &trueCode
+					if IsEnumType(scope.function.returnTypeName) {
+
+						// Make sure any local variable knows it should be an enum type
+						returnOp.SetPossibleType(scope, scope.function.returnTypeName)
+
+						if IsLiteralInteger(returnOp.operation) {
+							value := GetLiteralIntegerValue(returnOp.operation)
+							enumData := ENUM_MAP[scope.function.returnTypeName]
+							if value >= 0 {
+								name := enumData.valueToName[uint32(value)]
+								if len(name) > 0 {
+									returnOp.code = &name
+								}
+							}
+						}
+					} else {
+						switch returnOp.operation.opcode {
+						case OP_LITERAL_ZERO:
+							if IsHandleType(scope.function.returnTypeName) {
+								returnOp.code = &noneCode
+							} else if scope.function.returnTypeName == "bool" {
+								returnOp.code = &falseCode
+							}
+
+						case OP_LITERAL_ONE:
+							if scope.function.returnTypeName == "bool" {
+								returnOp.code = &trueCode
+							}
 						}
 					}
 				}
@@ -952,6 +974,21 @@ func (sb *SwitchBlock) RendersAsBlock() bool {
 func (sb *SwitchBlock) ResolveTypes(scope *Scope) {
 	if sb.conditional != nil {
 		sb.conditional.ResolveTypes(scope)
+
+		if IsEnumType(sb.conditional.graph.typeName) {
+			// Get the enum data
+			enumData := ENUM_MAP[sb.conditional.graph.typeName]
+
+			for _, child := range sb.body {
+				childCase := child.(*CaseBlock)
+				if childCase.value != nil {
+					code := enumData.valueToName[uint32(*childCase.value)]
+					if len(code) > 0 {
+						childCase.valueCode = &code
+					}
+				}
+			}
+		}
 	}
 	ResolveTypes(scope, sb.body)
 }
@@ -960,13 +997,18 @@ type CaseBlock struct {
 	startingOffset uint32
 	jumpLocation   uint32
 	value          *int32
+	valueCode      *string
 	body           []BlockElement
 }
 
 func (cb *CaseBlock) Render(writer CodeWriter) {
 	// Write out the top of the block
 	if cb.value != nil {
-		writer.Appendf("case %d:", *cb.value)
+		if cb.valueCode != nil {
+			writer.Appendf("case %s:", *cb.valueCode)
+		} else {
+			writer.Appendf("case %d:", *cb.value)
+		}
 	} else {
 		writer.Append("default:")
 	}

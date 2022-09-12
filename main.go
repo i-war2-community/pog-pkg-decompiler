@@ -71,6 +71,11 @@ func renderPackageImports(writer CodeWriter) {
 		import_map[pkgName] = true
 	}
 
+	if _, ok := import_map["Debug"]; !ok {
+		imports = append(imports, "Debug")
+		import_map["Debug"] = true
+	}
+
 	// Now check for any missing dependencies
 	for ii := 0; ii < len(imports); ii++ {
 		pkgName := imports[ii]

@@ -156,6 +156,25 @@ func (fd *FunctionDefinition) ResolveBodyTypes() {
 	ResolveTypes(fd.scope, fd.body)
 }
 
+func getEnumType(possibleTypes map[string]bool) string {
+	// Check for enum type
+	enumTypeCount := 0
+	var enumType string
+
+	for typeName, _ := range possibleTypes {
+		if IsEnumType(typeName) {
+			enumTypeCount++
+			enumType = typeName
+		}
+	}
+
+	if enumTypeCount == 1 {
+		return enumType
+	}
+
+	return UNKNOWN_TYPE
+}
+
 func (fd *FunctionDefinition) ResolveHeaderTypes() int {
 	resolvedCount := 0
 
@@ -208,17 +227,8 @@ func (fd *FunctionDefinition) ResolveHeaderTypes() int {
 			} else {
 
 				// Check for enum type
-				enumTypeCount := 0
-				var enumType string
-
-				for typeName, _ := range possibleTypes {
-					if IsEnumType(typeName) {
-						enumTypeCount++
-						enumType = typeName
-					}
-				}
-
-				if enumTypeCount == 1 {
+				enumType := getEnumType(possibleTypes)
+				if enumType != UNKNOWN_TYPE {
 					if v.typeName != enumType {
 						v.typeName = enumType
 						resolvedCount++
@@ -272,18 +282,28 @@ func (fd *FunctionDefinition) ResolveHeaderTypes() int {
 				types = append(types, possible)
 			}
 
-			baseType := findBaseTypeForAssignedTypes(types)
-
-			if baseType != UNKNOWN_TYPE {
-				if fd.declaration.returnTypeName != baseType {
-					fd.declaration.returnTypeName = baseType
+			// Check for enum type
+			enumType := getEnumType(possibleTypes)
+			if enumType != UNKNOWN_TYPE {
+				if fd.declaration.returnTypeName != enumType {
+					fd.declaration.returnTypeName = enumType
 					resolvedCount++
 				}
 			} else {
-				bestType := pickBestNonHandleType(possibleTypes)
-				if fd.declaration.returnTypeName != bestType {
-					fd.declaration.returnTypeName = bestType
-					resolvedCount++
+
+				baseType := findBaseTypeForAssignedTypes(types)
+
+				if baseType != UNKNOWN_TYPE {
+					if fd.declaration.returnTypeName != baseType {
+						fd.declaration.returnTypeName = baseType
+						resolvedCount++
+					}
+				} else {
+					bestType := pickBestNonHandleType(possibleTypes)
+					if fd.declaration.returnTypeName != bestType {
+						fd.declaration.returnTypeName = bestType
+						resolvedCount++
+					}
 				}
 			}
 		}
@@ -361,6 +381,9 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 	fd.body = fd.body[len(assignments):]
 
 	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, fd.declaration, writer)
+
+	writer.Appendf(`debug atomic Debug.PrintString("Inside function: %s %s\n");`, EXPORTING_PACKAGE, renderFunctionDefinitionHeader(fd.declaration))
+	writer.Append("\n")
 
 	RenderBlockElements(fd.body, writer)
 
