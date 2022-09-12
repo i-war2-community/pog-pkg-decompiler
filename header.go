@@ -22,29 +22,29 @@ type PackageInfo struct {
 
 var PACKAGES = map[string]*PackageInfo{}
 
-func (pkg *PackageInfo) dependsOnInternal(base string, visited map[string]bool) bool {
+// func (pkg *PackageInfo) dependsOnInternal(base string, visited map[string]bool) bool {
 
-	visited[fmt.Sprintf("%s->%s", pkg.name, base)] = true
+// 	visited[fmt.Sprintf("%s->%s", pkg.name, base)] = true
 
-	for dependency := range pkg.dependencies {
-		if dependency == base {
-			return true
-		}
+// 	for dependency := range pkg.dependencies {
+// 		if dependency == base {
+// 			return true
+// 		}
 
-		if depPkg, ok := PACKAGES[strings.ToLower(dependency)]; ok {
-			visitStr := fmt.Sprintf("%s->%s", depPkg.name, base)
-			_, already := visited[visitStr]
-			if already {
-				continue
-			}
-			if depPkg.dependsOnInternal(base, visited) {
-				return true
-			}
-		}
-	}
+// 		if depPkg, ok := PACKAGES[strings.ToLower(dependency)]; ok {
+// 			visitStr := fmt.Sprintf("%s->%s", depPkg.name, base)
+// 			_, already := visited[visitStr]
+// 			if already {
+// 				continue
+// 			}
+// 			if depPkg.dependsOnInternal(base, visited) {
+// 				return true
+// 			}
+// 		}
+// 	}
 
-	return false
-}
+// 	return false
+// }
 
 func (pkg *PackageInfo) DependsOn(base string) bool {
 	_, exists := pkg.dependencies[base]
