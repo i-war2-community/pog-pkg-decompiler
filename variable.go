@@ -37,15 +37,21 @@ type Variable struct {
 
 var VARIABLE_ID_COUNTER int = 0
 
-func (v Variable) AddAssignedType(typeName string) {
+func (v *Variable) AddAssignedType(typeName string) {
 	v.assignedTypes[typeName] = true
 }
 
-func (v Variable) AddReferencedType(typeName string) {
+func (v *Variable) AddReferencedType(typeName string) {
 	v.referencedTypes[typeName] = true
 }
 
-func (v Variable) GetPossibleTypes() map[string]bool {
+func (v *Variable) ResetPossibleTypes() {
+	v.assignedTypes = map[string]bool{}
+	v.referencedTypes = map[string]bool{}
+	v.refCount = 0
+}
+
+func (v *Variable) GetPossibleTypes() map[string]bool {
 	result := map[string]bool{}
 
 	for k, v := range v.assignedTypes {
@@ -59,7 +65,7 @@ func (v Variable) GetPossibleTypes() map[string]bool {
 	return result
 }
 
-func (v Variable) GetAssignedTypes() []string {
+func (v *Variable) GetAssignedTypes() []string {
 	result := []string{}
 
 	for k := range v.assignedTypes {
@@ -69,7 +75,7 @@ func (v Variable) GetAssignedTypes() []string {
 	return result
 }
 
-func (v Variable) GetReferencedTypes() []string {
+func (v *Variable) GetReferencedTypes() []string {
 	result := []string{}
 
 	for k := range v.referencedTypes {
@@ -94,13 +100,13 @@ func IsEnumType(typeName string) bool {
 type Scope struct {
 	function                 *FunctionDeclaration
 	functionEndOffset        uint32
-	variables                []Variable
+	variables                []*Variable
 	localVariableIndexOffset uint32
 }
 
 func (s *Scope) GetVariableByStackIndex(stackIndex uint32) *Variable {
 	for ii := 0; ii < len(s.variables); ii++ {
-		lv := &s.variables[ii]
+		lv := s.variables[ii]
 		if lv.stackIndex == stackIndex {
 			return lv
 		}

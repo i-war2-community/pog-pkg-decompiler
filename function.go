@@ -12,6 +12,7 @@ type FunctionParameter struct {
 	typeName       string
 	parameterName  string
 	potentialTypes map[string]bool
+	id             int
 }
 
 type FunctionDeclaration struct {
@@ -21,6 +22,16 @@ type FunctionDeclaration struct {
 	parameters          *[]FunctionParameter
 	possibleReturnTypes map[string]bool
 	autoDetectTypes     bool
+}
+
+func (fd *FunctionDeclaration) ResetPossibleTypes() {
+	fd.possibleReturnTypes = map[string]bool{}
+	if fd.parameters != nil {
+		params := *fd.parameters
+		for ii := range params {
+			params[ii].potentialTypes = map[string]bool{}
+		}
+	}
 }
 
 var FUNC_DECLARATIONS map[string]*FunctionDeclaration = map[string]*FunctionDeclaration{}
@@ -78,7 +89,7 @@ func findBaseTypeForReferencedTypes(referencedTypes []string, startingType strin
 			}
 
 			if baseType == UNKNOWN_TYPE {
-				baseType = referenced
+				baseType = "hobject"
 			}
 
 			if HandleIsDerivedFrom(baseType, referenced) {
@@ -118,14 +129,23 @@ func pickBestNonHandleType(possibleTypes map[string]bool) string {
 	return UNKNOWN_TYPE
 }
 
-func (fd *FunctionDefinition) ResolveTypes() int {
-	resolvedCount := 0
+func (fd *FunctionDefinition) ResetPossibleTypes() {
+	fd.declaration.ResetPossibleTypes()
+	for _, v := range fd.scope.variables {
+		v.ResetPossibleTypes()
+	}
+}
 
+func (fd *FunctionDefinition) ResolveBodyTypes() {
 	// Resolve variable types
 	ResolveTypes(fd.scope, fd.body)
+}
+
+func (fd *FunctionDefinition) ResolveHeaderTypes() int {
+	resolvedCount := 0
 
 	for idx := range fd.scope.variables {
-		v := &fd.scope.variables[idx]
+		v := fd.scope.variables[idx]
 		possibleTypes := v.GetPossibleTypes()
 
 		if idx < int(fd.scope.localVariableIndexOffset) {
@@ -210,7 +230,7 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 
 	// Copy over parameter types from their respective scope variable to the function declaration
 	for idx := 0; idx < int(fd.scope.localVariableIndexOffset); idx++ {
-		v := &fd.scope.variables[idx]
+		v := fd.scope.variables[idx]
 		param := &(*fd.declaration.parameters)[idx]
 		if v.typeName != UNKNOWN_TYPE {
 			param.typeName = v.typeName
@@ -287,7 +307,7 @@ func (fd *FunctionDefinition) isLocalVariableInitialAssignment(statement *Statem
 				return nil
 			}
 		}
-		return &fd.scope.variables[varData.index]
+		return fd.scope.variables[varData.index]
 	}
 	return nil
 }
@@ -460,10 +480,10 @@ func (f *FunctionDeclaration) GetScopedName() string {
 	}
 }
 
-func writeLocalVariableDeclarations(variables []Variable, assignments map[uint32]*Statement, declaration *FunctionDeclaration, writer CodeWriter) {
+func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint32]*Statement, declaration *FunctionDeclaration, writer CodeWriter) {
 	written := 0
 	for ii := 0; ii < len(variables); ii++ {
-		lv := &variables[ii]
+		lv := variables[ii]
 		if lv.typeName == UNKNOWN_TYPE && lv.refCount == 0 {
 			lv.typeName = "int"
 		}
@@ -535,7 +555,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		declaration:   declaration,
 		scope: &Scope{
 			function:  declaration,
-			variables: []Variable{},
+			variables: []*Variable{},
 		},
 	}
 
@@ -602,7 +622,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	if declaration.parameters != nil {
 		for ii := 0; ii < len(*declaration.parameters); ii++ {
 			param := &(*declaration.parameters)[ii]
-			v := Variable{
+			v := &Variable{
 				typeName:        param.typeName,
 				variableName:    param.parameterName,
 				stackIndex:      uint32(ii),
@@ -612,6 +632,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 			}
 			VARIABLE_ID_COUNTER++
 			definition.scope.variables = append(definition.scope.variables, v)
+			param.id = v.id
 		}
 
 		definition.scope.localVariableIndexOffset = uint32(len(*declaration.parameters))
@@ -621,7 +642,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	if localVariableCount > 0 {
 		var ii uint32
 		for ii = 0; ii < localVariableCount; ii++ {
-			lv := Variable{
+			lv := &Variable{
 				typeName:        UNKNOWN_TYPE,
 				variableName:    fmt.Sprintf("local_%d", ii),
 				stackIndex:      uint32(ii + definition.scope.localVariableIndexOffset),

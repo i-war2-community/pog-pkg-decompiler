@@ -335,7 +335,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
 		varData := og.operation.data.(VariableWriteData)
-		v := &scope.variables[varData.index]
+		v := scope.variables[varData.index]
 		// Add to the variable's ref count if this isn't just from a handle init
 		if og.children[0].operation.opcode != OP_HANDLE_INIT {
 			v.refCount++

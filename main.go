@@ -409,13 +409,22 @@ func readCodeSection(file *os.File, writer CodeWriter) error {
 
 func resolveAllTypes() {
 	for {
+		// Resolve the types for each function
 		resolveCount := 0
+
+		// First reset all the possible types
 		for ii := range DECOMPILED_FUNCS {
+			DECOMPILED_FUNCS[ii].ResetPossibleTypes()
+		}
+
+		// Call the type resolution done on the statements
+		for ii := range DECOMPILED_FUNCS {
+			DECOMPILED_FUNCS[ii].ResolveBodyTypes()
+			//}
+
+			//for ii := range DECOMPILED_FUNCS {
 			fnc := DECOMPILED_FUNCS[ii]
-			if fnc.declaration.parameters == nil {
-				continue
-			}
-			resolveCount += fnc.ResolveTypes()
+			resolveCount += fnc.ResolveHeaderTypes()
 		}
 		if resolveCount == 0 {
 			break
