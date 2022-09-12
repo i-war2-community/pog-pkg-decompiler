@@ -73,10 +73,29 @@ func (og *OpGraph) String() string {
 	}
 }
 
-func (og *OpGraph) SetVariableReferenceType(scope *Scope, typeName string) {
-	if og.operation.opcode == OP_VARIABLE_READ {
+func (og *OpGraph) SetPossibleType(scope *Scope, typeName string) {
+	switch og.operation.opcode {
+	case OP_VARIABLE_READ:
 		varData := og.operation.data.(VariableReadData)
 		scope.variables[varData.index].AddReferencedType(typeName)
+
+	case OP_LITERAL_ZERO, OP_LITERAL_ONE, OP_LITERAL_BYTE, OP_LITERAL_SHORT, OP_LITERAL_INT:
+		if IsEnumType(typeName) {
+			numberData := og.operation.data.(LiteralInteger)
+			value := numberData.GetValue()
+			if value >= 0 {
+				memberName := ENUM_MAP[typeName].valueToName[uint32(numberData.GetValue())]
+				if len(memberName) > 0 {
+					og.code = &memberName
+				}
+			}
+		}
+
+	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL:
+		fncData := og.operation.data.(FunctionCallData)
+		if IsEnumType(typeName) {
+			fncData.declaration.possibleReturnTypes[typeName] = true
+		}
 	}
 }
 
@@ -160,16 +179,16 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 	case OP_INT_ADD, OP_INT_SUB, OP_INT_MUL, OP_INT_DIV, OP_INT_MOD:
 		og.typeName = "int"
-		og.children[0].SetVariableReferenceType(scope, "int")
-		og.children[1].SetVariableReferenceType(scope, "int")
+		og.children[0].SetPossibleType(scope, "int")
+		og.children[1].SetPossibleType(scope, "int")
 
 	case OP_CAST_INT_TO_FLT, OP_FLT_NEG, OP_LITERAL_FLT:
 		og.typeName = "float"
 
 	case OP_FLT_ADD, OP_FLT_SUB, OP_FLT_MUL, OP_FLT_DIV:
 		og.typeName = "float"
-		og.children[0].SetVariableReferenceType(scope, "float")
-		og.children[1].SetVariableReferenceType(scope, "float")
+		og.children[0].SetPossibleType(scope, "float")
+		og.children[1].SetPossibleType(scope, "float")
 
 	case OP_LITERAL_STRING:
 		og.typeName = "string"
@@ -205,13 +224,36 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 				if param.typeName != UNKNOWN_TYPE {
 
-					child.SetVariableReferenceType(scope, param.typeName)
+					child.SetPossibleType(scope, param.typeName)
+
+					if IsEnumType(param.typeName) {
+						var literal LiteralInteger = nil
+						switch child.operation.opcode {
+						case OP_LITERAL_ONE, OP_LITERAL_ZERO:
+							literal = child.operation.data.(LiteralBitData)
+
+						case OP_LITERAL_BYTE:
+							literal = child.operation.data.(LiteralByteData)
+
+						case OP_LITERAL_SHORT:
+							literal = child.operation.data.(LiteralShortData)
+
+						case OP_LITERAL_INT:
+							literal = child.operation.data.(LiteralIntData)
+						}
+						if literal != nil {
+							// Replace the enum value with the name if it matches any known values
+							if name, ok := ENUM_MAP[param.typeName].valueToName[uint32(literal.GetValue())]; ok {
+								child.code = &name
+							}
+						}
+					}
 
 					switch child.operation.opcode {
 					case OP_LITERAL_ZERO:
 						if param.typeName == "bool" {
 							child.code = &falseCode
-						} else if _, ok := HANDLE_MAP[param.typeName]; ok {
+						} else if IsHandleType(param.typeName) {
 							child.code = &noneCode
 						}
 
@@ -232,8 +274,8 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1 := og.children[0]
 		child2 := og.children[1]
 
-		child1.SetVariableReferenceType(scope, "int")
-		child2.SetVariableReferenceType(scope, "int")
+		child1.SetPossibleType(scope, "int")
+		child2.SetPossibleType(scope, "int")
 
 	case OP_INT_EQUALS, OP_INT_NOT_EQUALS:
 		og.typeName = "bool"
@@ -241,8 +283,8 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1 := og.children[0]
 		child2 := og.children[1]
 
-		child1.SetVariableReferenceType(scope, "int")
-		child2.SetVariableReferenceType(scope, "int")
+		child1.SetPossibleType(scope, "int")
+		child2.SetPossibleType(scope, "int")
 
 		child1IsHandle := IsHandleType(child1.typeName)
 		child2IsHandle := IsHandleType(child2.typeName)
@@ -263,19 +305,19 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
-		if child1IsHandle && child2.typeName == UNKNOWN_TYPE {
+		if child1IsHandle {
 			if child2IsCast {
-				child2.children[0].SetVariableReferenceType(scope, child1.typeName)
+				child2.children[0].SetPossibleType(scope, "hobject")
 			} else {
-				child2.SetVariableReferenceType(scope, child1.typeName)
+				child2.SetPossibleType(scope, "hobject")
 			}
 		}
 
-		if child2IsHandle && child1.typeName == UNKNOWN_TYPE {
+		if child2IsHandle {
 			if child1IsCast {
-				child1.children[0].SetVariableReferenceType(scope, child2.typeName)
+				child1.children[0].SetPossibleType(scope, "hobject")
 			} else {
-				child1.SetVariableReferenceType(scope, child2.typeName)
+				child1.SetPossibleType(scope, "hobject")
 			}
 		}
 
@@ -284,8 +326,8 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1 := og.children[0]
 		child2 := og.children[1]
 
-		child1.SetVariableReferenceType(scope, "float")
-		child2.SetVariableReferenceType(scope, "float")
+		child1.SetPossibleType(scope, "float")
+		child2.SetPossibleType(scope, "float")
 
 	case OP_STRING_EQUALS:
 		og.typeName = "bool"
@@ -299,10 +341,15 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
 		varData := og.operation.data.(VariableWriteData)
-		v := &scope.variables[varData.index]
+		v := scope.variables[varData.index]
 		// Add to the variable's ref count if this isn't just from a handle init
 		if og.children[0].operation.opcode != OP_HANDLE_INIT {
 			v.refCount++
+		}
+
+		// Check for assigning an enum from a literal integer
+		if IsEnumType(v.typeName) {
+			og.children[0].SetPossibleType(scope, v.typeName)
 		}
 
 		// Copy over the type of our first child
@@ -338,7 +385,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				v.AddAssignedType(og.typeName)
 			}
 		} else if v.typeName != UNKNOWN_TYPE {
-			og.children[0].SetVariableReferenceType(scope, v.typeName)
+			og.children[0].SetPossibleType(scope, v.typeName)
 		}
 
 	case OP_JUMP:
@@ -361,17 +408,35 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			if scope.function.returnTypeName != UNKNOWN_TYPE {
 				if len(og.children) > 0 {
 					returnOp := og.children[0]
-					switch returnOp.operation.opcode {
-					case OP_LITERAL_ZERO:
-						if IsHandleType(scope.function.returnTypeName) {
-							returnOp.code = &noneCode
-						} else if scope.function.returnTypeName == "bool" {
-							returnOp.code = &falseCode
-						}
 
-					case OP_LITERAL_ONE:
-						if scope.function.returnTypeName == "bool" {
-							returnOp.code = &trueCode
+					if IsEnumType(scope.function.returnTypeName) {
+
+						// Make sure any local variable knows it should be an enum type
+						returnOp.SetPossibleType(scope, scope.function.returnTypeName)
+
+						if IsLiteralInteger(returnOp.operation) {
+							value := GetLiteralIntegerValue(returnOp.operation)
+							enumData := ENUM_MAP[scope.function.returnTypeName]
+							if value >= 0 {
+								name := enumData.valueToName[uint32(value)]
+								if len(name) > 0 {
+									returnOp.code = &name
+								}
+							}
+						}
+					} else {
+						switch returnOp.operation.opcode {
+						case OP_LITERAL_ZERO:
+							if IsHandleType(scope.function.returnTypeName) {
+								returnOp.code = &noneCode
+							} else if scope.function.returnTypeName == "bool" {
+								returnOp.code = &falseCode
+							}
+
+						case OP_LITERAL_ONE:
+							if scope.function.returnTypeName == "bool" {
+								returnOp.code = &trueCode
+							}
 						}
 					}
 				}
@@ -382,7 +447,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	case OP_JUMP_IF_FALSE, OP_JUMP_IF_TRUE:
 		// If we have a variable read inside an if statement, we might have a bool
 		if len(og.children) == 1 {
-			og.children[0].SetVariableReferenceType(scope, "bool")
+			og.children[0].SetPossibleType(scope, "bool")
 		}
 
 	default:
@@ -909,6 +974,21 @@ func (sb *SwitchBlock) RendersAsBlock() bool {
 func (sb *SwitchBlock) ResolveTypes(scope *Scope) {
 	if sb.conditional != nil {
 		sb.conditional.ResolveTypes(scope)
+
+		if IsEnumType(sb.conditional.graph.typeName) {
+			// Get the enum data
+			enumData := ENUM_MAP[sb.conditional.graph.typeName]
+
+			for _, child := range sb.body {
+				childCase := child.(*CaseBlock)
+				if childCase.value != nil {
+					code := enumData.valueToName[uint32(*childCase.value)]
+					if len(code) > 0 {
+						childCase.valueCode = &code
+					}
+				}
+			}
+		}
 	}
 	ResolveTypes(scope, sb.body)
 }
@@ -917,13 +997,18 @@ type CaseBlock struct {
 	startingOffset uint32
 	jumpLocation   uint32
 	value          *int32
+	valueCode      *string
 	body           []BlockElement
 }
 
 func (cb *CaseBlock) Render(writer CodeWriter) {
 	// Write out the top of the block
 	if cb.value != nil {
-		writer.Appendf("case %d:", *cb.value)
+		if cb.valueCode != nil {
+			writer.Appendf("case %s:", *cb.valueCode)
+		} else {
+			writer.Appendf("case %d:", *cb.value)
+		}
 	} else {
 		writer.Append("default:")
 	}

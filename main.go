@@ -71,6 +71,11 @@ func renderPackageImports(writer CodeWriter) {
 		import_map[pkgName] = true
 	}
 
+	if _, ok := import_map["Debug"]; !ok {
+		imports = append(imports, "Debug")
+		import_map["Debug"] = true
+	}
+
 	// Now check for any missing dependencies
 	for ii := 0; ii < len(imports); ii++ {
 		pkgName := imports[ii]
@@ -118,6 +123,31 @@ func renderFunctionExports(writer CodeWriter) {
 		}
 	}
 	writer.Append(";\n\n")
+}
+
+func renderEnums(writer CodeWriter) {
+	pkg, ok := PACKAGES[strings.ToLower(EXPORTING_PACKAGE)]
+	if ok {
+		for enumName := range pkg.enums {
+			writer.Appendf("enum %s\n", enumName)
+			writer.Append("{\n")
+			writer.PushIndent()
+			keys := []string{}
+			for k := range ENUM_MAP[enumName].nameToValue {
+				keys = append(keys, k)
+			}
+			for ii, k := range keys {
+				writer.Appendf("%s = 0x%08X", k, ENUM_MAP[enumName].nameToValue[k])
+				if ii < len(keys)-1 {
+					writer.Append(",\n")
+				} else {
+					writer.Append("\n")
+				}
+			}
+			writer.PopIndent()
+			writer.Append("};\n\n")
+		}
+	}
 }
 
 func readString(file *os.File) (string, error) {
@@ -384,13 +414,25 @@ func readCodeSection(file *os.File, writer CodeWriter) error {
 
 func resolveAllTypes() {
 	for {
+		// Resolve the types for each function
 		resolveCount := 0
+
+		// First reset all the possible types
+		for ii := range DECOMPILED_FUNCS {
+			DECOMPILED_FUNCS[ii].ResetPossibleTypes()
+		}
+
+		// Call the type resolution done on the statements
+		for ii := range DECOMPILED_FUNCS {
+			DECOMPILED_FUNCS[ii].ResolveBodyTypes()
+		}
+
 		for ii := range DECOMPILED_FUNCS {
 			fnc := DECOMPILED_FUNCS[ii]
 			if fnc.declaration.parameters == nil {
 				continue
 			}
-			resolveCount += fnc.ResolveTypes()
+			resolveCount += fnc.ResolveHeaderTypes()
 		}
 		if resolveCount == 0 {
 			break
@@ -427,7 +469,7 @@ func main() {
 	fmt.Printf("Decompiling package: %s\n", filename)
 
 	if len(INCLUDES_DIR) > 0 {
-		LoadFunctionDeclarationsFromHeaders(INCLUDES_DIR)
+		LoadDeclarationsFromHeaders(INCLUDES_DIR)
 	}
 
 	form, err := readSectionHeader(f)
@@ -464,12 +506,17 @@ func main() {
 	// If we finished resolving everything, but we still have some unknown function parameters, set them to int
 	for _, fnc := range DECOMPILED_FUNCS {
 		if fnc.declaration.parameters != nil {
-			for _, param := range *fnc.declaration.parameters {
+			params := *fnc.declaration.parameters
+			for ii := range params {
+				param := &params[ii]
 				if param.typeName == UNKNOWN_TYPE {
 					param.typeName = "int"
 					param.potentialTypes["int"] = true
+					fmt.Printf("WARN: Failed to resolve the type for parameter %s of function %s, defaulting to int.\n", param.parameterName, fnc.declaration.GetScopedName())
 				}
 			}
+			// Lock in our header types
+			fnc.declaration.autoDetectTypes = false
 		}
 	}
 
@@ -486,6 +533,8 @@ func main() {
 	writer.Appendf("package %s;\n\n", EXPORTING_PACKAGE)
 	renderPackageImports(writer)
 	renderFunctionExports(writer)
+
+	renderEnums(writer)
 
 	// Render the prototypes
 	for ii := range DECOMPILED_FUNCS {

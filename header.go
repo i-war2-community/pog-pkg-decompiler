@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 const SYSTEM_PACKAGE = "__system"
@@ -18,6 +20,23 @@ type PackageInfo struct {
 	functions    []*FunctionDeclaration
 	dependencies map[string]bool
 	handles      map[string]bool
+	enums        map[string]bool
+}
+
+type ManualDependencyActions struct {
+	add    []string
+	remove []string
+}
+
+// HACK: We can't completely rely on the 'uses' statements in the headers because they sometimes leave out
+// some dependencies. I will hard code the missing ones here for now so we don't have to modify the headers.
+var MANUAL_DEPENDENCIES = map[string]ManualDependencyActions{
+	"iDockport": {add: []string{"iSim"}},
+	"iLoadout":  {add: []string{"GUI"}},
+	"Sim":       {remove: []string{"Subsim"}},
+	"Subsim":    {add: []string{"Sim"}},
+	"Object":    {add: []string{"List"}},
+	"iScore":    {add: []string{"iShip"}},
 }
 
 var PACKAGES = map[string]*PackageInfo{}
@@ -135,9 +154,31 @@ func removeComments(contents []byte) []byte {
 	return contents
 }
 
+func isValidIdentifier(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+
+	for ii := range name {
+		r := rune(name[ii])
+		// We can't start with a number
+		if ii == 0 && unicode.IsNumber(r) {
+			return false
+		}
+
+		// We can only have letters, numbers, and underscores
+		if !unicode.IsNumber(r) &&
+			!unicode.IsLetter(r) &&
+			r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 func parsePackageHandles(contents []byte, pkg *PackageInfo) {
 	// Find all handle declarations
-	r, _ := regexp.Compile("(handle.*:.*;)")
+	r, _ := regexp.Compile("(handle[^:]*:[^;]*;)")
 
 	all := r.FindAll(contents, -1)
 
@@ -145,8 +186,15 @@ func parsePackageHandles(contents []byte, pkg *PackageInfo) {
 		handle := string(all[ii][len("handle") : len(all[ii])-1])
 		parts := strings.Split(handle, ":")
 		typeName := strings.TrimSpace(parts[0])
+		baseType := strings.TrimSpace(parts[1])
+
+		if !isValidIdentifier(typeName) || !isValidIdentifier(baseType) {
+			fmt.Printf("ERROR: Failed to parse package %s handle definition '%s', invalid identifier.\n", pkg.name, all[ii])
+			continue
+		}
+
 		HANDLE_MAP[typeName] = HandleTypeInfo{
-			baseType:      strings.TrimSpace(parts[1]),
+			baseType:      baseType,
 			sourcePackage: pkg.name,
 		}
 		pkg.handles[typeName] = true
@@ -155,7 +203,7 @@ func parsePackageHandles(contents []byte, pkg *PackageInfo) {
 
 func parsePackageDependencies(contents []byte, pkg *PackageInfo) {
 	// Find all handle declarations
-	r, _ := regexp.Compile("(uses.*);")
+	r, _ := regexp.Compile(`([\s]uses[^;]*;)`)
 
 	all := r.FindAll(contents, -1)
 
@@ -167,11 +215,116 @@ func parsePackageDependencies(contents []byte, pkg *PackageInfo) {
 
 	for ii := range all {
 		depList := string(all[ii])
-		depList = strings.TrimPrefix(depList, "uses")
+		depList = strings.TrimPrefix(depList[1:], "uses")
 		depList = strings.TrimSuffix(depList, ";")
 		deps := strings.Split(string(depList), ",")
 		for _, dep := range deps {
+			dep = strings.TrimSpace(dep)
+			if !isValidIdentifier(dep) {
+				fmt.Printf("ERROR: Failed to parse package %s dependency list '%s', invalid identifier %s.\n", pkg.name, all[ii], dep)
+				continue
+			}
 			pkg.dependencies[strings.TrimSpace(dep)] = true
+		}
+	}
+}
+
+func parsePackageEnums(contents []byte, pkg *PackageInfo) {
+	// Find all handle declarations
+	r, _ := regexp.Compile("(enum[^}]*})")
+
+	all := r.FindAll(contents, -1)
+
+	for ii := range all {
+		hasError := false
+		enumData := EnumTypeInfo{
+			valueToName: map[uint32]string{},
+			nameToValue: map[string]uint32{},
+		}
+		enumDef := string(all[ii])
+		enumDef = strings.TrimPrefix(enumDef, "enum")
+		enumDef = strings.TrimSuffix(enumDef, "}")
+
+		// Get the name
+		parts := strings.Split(enumDef, "{")
+
+		if len(parts) != 2 || len(strings.TrimSpace(parts[0])) == 0 {
+			fmt.Printf("WARN: Enum name missing for enum in package %s header.\n", pkg.name)
+			continue
+		}
+
+		enumName := strings.TrimSpace(parts[0])
+
+		if !isValidIdentifier(enumName) {
+			fmt.Printf("WARN: Invalid enum name %s in package %s header.\n", enumName, pkg.name)
+			continue
+		}
+
+		// Figure out the members
+		members := strings.Split(parts[1], ",")
+		var nextValue uint32 = 0
+
+		for _, member := range members {
+			var value uint32
+			var name string
+			parts := strings.Split(member, "=")
+			if len(parts) == 2 {
+				var err error
+				name = strings.TrimSpace(parts[0])
+				valueStr := strings.TrimSpace(parts[1])
+				if strings.Contains(valueStr, "|") {
+					names := strings.Split(valueStr, "|")
+					value = 0
+					for _, name := range names {
+						var subValue uint32
+						var ok bool
+						name = strings.TrimSpace(name)
+						if subValue, ok = enumData.nameToValue[name]; !ok {
+							err = fmt.Errorf("failed to find referenced member value for %s", name)
+							break
+						}
+						value = uint32(value) | subValue
+					}
+				} else {
+					base := 10
+					if strings.HasPrefix(valueStr, "0x") {
+						base = 16
+						// Skip the prefix
+						valueStr = valueStr[2:]
+					}
+					var v int64
+					v, err = strconv.ParseInt(valueStr, base, 64)
+					value = uint32(v)
+				}
+				if err != nil {
+					fmt.Printf("WARN: Failed to parse value for enum %s member %s: %s, %v\n.", enumName, name, valueStr, err)
+					hasError = true
+					break
+				}
+			} else if len(parts) == 1 {
+				value = nextValue
+				name = strings.TrimSpace(member)
+			} else {
+				fmt.Printf("ERROR: Failed to process member for enum %s.\n", enumName)
+				hasError = true
+				break
+			}
+
+			if !isValidIdentifier(name) {
+				fmt.Printf("WARN: Invalid identifier for enum %s member %s.\n.", enumName, name)
+				hasError = true
+				break
+			}
+
+			enumData.nameToValue[name] = value
+			enumData.valueToName[value] = name
+			nextValue = value + 1
+		}
+
+		if !hasError {
+			// Save off this enum
+			ENUM_MAP[enumName] = enumData
+			pkg.enums[enumName] = true
 		}
 	}
 }
@@ -186,6 +339,7 @@ func parseInclude(path string) {
 		functions:    []*FunctionDeclaration{},
 		dependencies: map[string]bool{},
 		handles:      map[string]bool{},
+		enums:        map[string]bool{},
 	}
 	PACKAGES[strings.ToLower(packageName)] = &packageInfo
 
@@ -199,6 +353,7 @@ func parseInclude(path string) {
 
 	parsePackageHandles(contents, &packageInfo)
 	parsePackageDependencies(contents, &packageInfo)
+	parsePackageEnums(contents, &packageInfo)
 
 	fileScanner := bufio.NewScanner(bytes.NewReader(contents))
 	fileScanner.Split(scanPrototypes)
@@ -220,7 +375,7 @@ func parseInclude(path string) {
 	}
 }
 
-func LoadFunctionDeclarationsFromHeaders(includeDir string) {
+func LoadDeclarationsFromHeaders(includeDir string) {
 	filepath.WalkDir(includeDir, parseEntry)
 }
 
@@ -229,6 +384,17 @@ func DetectPackageDependencies() {
 	for _, pkg := range PACKAGES {
 		if pkg.dependencies == nil {
 			pkg.DetectDepdencies()
+		}
+
+		depActions := MANUAL_DEPENDENCIES[pkg.name]
+		// Add in the manual hack dependencies
+		for _, dep := range depActions.add {
+			pkg.dependencies[dep] = true
+		}
+
+		// Remove the manual hack dependencies
+		for _, dep := range depActions.remove {
+			delete(pkg.dependencies, dep)
 		}
 	}
 }

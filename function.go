@@ -12,6 +12,7 @@ type FunctionParameter struct {
 	typeName       string
 	parameterName  string
 	potentialTypes map[string]bool
+	id             int
 }
 
 type FunctionDeclaration struct {
@@ -20,6 +21,17 @@ type FunctionDeclaration struct {
 	returnTypeName      string
 	parameters          *[]FunctionParameter
 	possibleReturnTypes map[string]bool
+	autoDetectTypes     bool
+}
+
+func (fd *FunctionDeclaration) ResetPossibleTypes() {
+	fd.possibleReturnTypes = map[string]bool{}
+	if fd.parameters != nil {
+		params := *fd.parameters
+		for ii := range params {
+			params[ii].potentialTypes = map[string]bool{}
+		}
+	}
 }
 
 var FUNC_DECLARATIONS map[string]*FunctionDeclaration = map[string]*FunctionDeclaration{}
@@ -56,7 +68,22 @@ func findBaseTypeForAssignedTypes(assignedTypes []string) string {
 				baseType = assigned
 				continue
 			}
-			baseType = UNKNOWN_TYPE
+			common := UNKNOWN_TYPE
+			for typeA := baseType; len(typeA) > 0; typeA = HANDLE_MAP[typeA].baseType {
+				for typeB := assigned; len(typeB) > 0; typeB = HANDLE_MAP[typeB].baseType {
+					if typeA == typeB {
+						common = typeA
+						break
+					}
+				}
+				if common != UNKNOWN_TYPE {
+					break
+				}
+			}
+			if common != UNKNOWN_TYPE {
+				baseType = common
+				continue
+			}
 			break
 		}
 		return baseType
@@ -77,7 +104,7 @@ func findBaseTypeForReferencedTypes(referencedTypes []string, startingType strin
 			}
 
 			if baseType == UNKNOWN_TYPE {
-				baseType = referenced
+				baseType = "hobject"
 			}
 
 			if HandleIsDerivedFrom(baseType, referenced) {
@@ -117,17 +144,51 @@ func pickBestNonHandleType(possibleTypes map[string]bool) string {
 	return UNKNOWN_TYPE
 }
 
-func (fd *FunctionDefinition) ResolveTypes() int {
-	resolvedCount := 0
+func (fd *FunctionDefinition) ResetPossibleTypes() {
+	fd.declaration.ResetPossibleTypes()
+	for _, v := range fd.scope.variables {
+		v.ResetPossibleTypes()
+	}
+}
 
+func (fd *FunctionDefinition) ResolveBodyTypes() {
 	// Resolve variable types
 	ResolveTypes(fd.scope, fd.body)
+}
+
+func getEnumType(possibleTypes map[string]bool) string {
+	// Check for enum type
+	enumTypeCount := 0
+	var enumType string
+
+	for typeName, _ := range possibleTypes {
+		if IsEnumType(typeName) {
+			enumTypeCount++
+			enumType = typeName
+		}
+	}
+
+	if enumTypeCount == 1 {
+		return enumType
+	}
+
+	return UNKNOWN_TYPE
+}
+
+func (fd *FunctionDefinition) ResolveHeaderTypes() int {
+	resolvedCount := 0
 
 	for idx := range fd.scope.variables {
-		v := &fd.scope.variables[idx]
+		v := fd.scope.variables[idx]
 		possibleTypes := v.GetPossibleTypes()
 
 		if idx < int(fd.scope.localVariableIndexOffset) {
+
+			// If we had a proper function declaration, we shouldn't change our types
+			if !fd.declaration.autoDetectTypes {
+				continue
+			}
+
 			for key := range (*fd.declaration.parameters)[idx].potentialTypes {
 				possibleTypes[key] = true
 			}
@@ -149,7 +210,7 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 
 			// If this is a function parameter, add the types that were assigned to it
 			if idx < int(fd.scope.localVariableIndexOffset) {
-				assignedTypes = []string{}
+				//assignedTypes = []string{}
 				for key := range (*fd.declaration.parameters)[idx].potentialTypes {
 					assignedTypes = append(assignedTypes, key)
 				}
@@ -164,6 +225,17 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 					resolvedCount++
 				}
 			} else {
+
+				// Check for enum type
+				enumType := getEnumType(possibleTypes)
+				if enumType != UNKNOWN_TYPE {
+					if v.typeName != enumType {
+						v.typeName = enumType
+						resolvedCount++
+					}
+					continue
+				}
+
 				if len(assignedTypes) == 1 {
 					if v.typeName != assignedTypes[0] {
 						v.typeName = assignedTypes[0]
@@ -183,44 +255,56 @@ func (fd *FunctionDefinition) ResolveTypes() int {
 
 	// Copy over parameter types from their respective scope variable to the function declaration
 	for idx := 0; idx < int(fd.scope.localVariableIndexOffset); idx++ {
-		v := &fd.scope.variables[idx]
+		v := fd.scope.variables[idx]
 		param := &(*fd.declaration.parameters)[idx]
 		if v.typeName != UNKNOWN_TYPE {
 			param.typeName = v.typeName
 		}
 	}
 
-	// See if we can resolve the return type
-	if len(fd.declaration.possibleReturnTypes) == 1 {
-		for key := range fd.declaration.possibleReturnTypes {
-			if fd.declaration.returnTypeName != key {
-				fd.declaration.returnTypeName = key
-				resolvedCount++
+	if fd.declaration.autoDetectTypes {
+		// See if we can resolve the return type
+		if len(fd.declaration.possibleReturnTypes) == 1 {
+			for key := range fd.declaration.possibleReturnTypes {
+				if fd.declaration.returnTypeName != key {
+					fd.declaration.returnTypeName = key
+					resolvedCount++
+				}
+				break
 			}
-			break
-		}
-	} else if len(fd.declaration.possibleReturnTypes) > 1 {
+		} else if len(fd.declaration.possibleReturnTypes) > 1 {
 
-		possibleTypes := fd.declaration.possibleReturnTypes
+			possibleTypes := fd.declaration.possibleReturnTypes
 
-		// Check if they are handle types
-		types := []string{}
-		for possible := range possibleTypes {
-			types = append(types, possible)
-		}
-
-		baseType := findBaseTypeForAssignedTypes(types)
-
-		if baseType != UNKNOWN_TYPE {
-			if fd.declaration.returnTypeName != baseType {
-				fd.declaration.returnTypeName = baseType
-				resolvedCount++
+			// Check if they are handle types
+			types := []string{}
+			for possible := range possibleTypes {
+				types = append(types, possible)
 			}
-		} else {
-			bestType := pickBestNonHandleType(possibleTypes)
-			if fd.declaration.returnTypeName != bestType {
-				fd.declaration.returnTypeName = bestType
-				resolvedCount++
+
+			// Check for enum type
+			enumType := getEnumType(possibleTypes)
+			if enumType != UNKNOWN_TYPE {
+				if fd.declaration.returnTypeName != enumType {
+					fd.declaration.returnTypeName = enumType
+					resolvedCount++
+				}
+			} else {
+
+				baseType := findBaseTypeForAssignedTypes(types)
+
+				if baseType != UNKNOWN_TYPE {
+					if fd.declaration.returnTypeName != baseType {
+						fd.declaration.returnTypeName = baseType
+						resolvedCount++
+					}
+				} else {
+					bestType := pickBestNonHandleType(possibleTypes)
+					if fd.declaration.returnTypeName != bestType {
+						fd.declaration.returnTypeName = bestType
+						resolvedCount++
+					}
+				}
 			}
 		}
 	}
@@ -258,7 +342,7 @@ func (fd *FunctionDefinition) isLocalVariableInitialAssignment(statement *Statem
 				return nil
 			}
 		}
-		return &fd.scope.variables[varData.index]
+		return fd.scope.variables[varData.index]
 	}
 	return nil
 }
@@ -298,6 +382,9 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, fd.declaration, writer)
 
+	writer.Appendf(`debug atomic Debug.PrintString("Inside function: %s %s\n");`, EXPORTING_PACKAGE, renderFunctionDefinitionHeader(fd.declaration))
+	writer.Append("\n")
+
 	RenderBlockElements(fd.body, writer)
 
 	writer.PopIndent()
@@ -309,6 +396,7 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 	result.pkg = pkg
 	result.name = name
 	result.possibleReturnTypes = map[string]bool{}
+	result.autoDetectTypes = true
 
 	// Check to see if we have this one already
 	if existing, ok := FUNC_DECLARATIONS[result.GetScopedName()]; ok {
@@ -323,6 +411,7 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 
 func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration {
 	result := new(FunctionDeclaration)
+	result.autoDetectTypes = false
 
 	if !strings.HasPrefix(prototype, PROTOTYPE_PREFIX) {
 		fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
@@ -429,10 +518,10 @@ func (f *FunctionDeclaration) GetScopedName() string {
 	}
 }
 
-func writeLocalVariableDeclarations(variables []Variable, assignments map[uint32]*Statement, declaration *FunctionDeclaration, writer CodeWriter) {
+func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint32]*Statement, declaration *FunctionDeclaration, writer CodeWriter) {
 	written := 0
 	for ii := 0; ii < len(variables); ii++ {
-		lv := &variables[ii]
+		lv := variables[ii]
 		if lv.typeName == UNKNOWN_TYPE && lv.refCount == 0 {
 			lv.typeName = "int"
 		}
@@ -444,10 +533,15 @@ func writeLocalVariableDeclarations(variables []Variable, assignments map[uint32
 		if assignment, ok := assignments[lv.stackIndex]; ok {
 			writer.Appendf("%s ", lv.typeName)
 			assignment.Render(writer)
-			writer.Append(";\n")
+			writer.Append(";")
 		} else {
-			writer.Appendf("%s %s;\n", lv.typeName, lv.variableName)
+			writer.Appendf("%s %s;", lv.typeName, lv.variableName)
 		}
+
+		if OUTPUT_ASSEMBLY {
+			writer.Appendf(" // ID: %d", lv.id)
+		}
+		writer.Append("\n")
 		written++
 	}
 
@@ -499,7 +593,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		declaration:   declaration,
 		scope: &Scope{
 			function:  declaration,
-			variables: []Variable{},
+			variables: []*Variable{},
 		},
 	}
 
@@ -566,7 +660,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	if declaration.parameters != nil {
 		for ii := 0; ii < len(*declaration.parameters); ii++ {
 			param := &(*declaration.parameters)[ii]
-			v := Variable{
+			v := &Variable{
 				typeName:        param.typeName,
 				variableName:    param.parameterName,
 				stackIndex:      uint32(ii),
@@ -576,6 +670,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 			}
 			VARIABLE_ID_COUNTER++
 			definition.scope.variables = append(definition.scope.variables, v)
+			param.id = v.id
 		}
 
 		definition.scope.localVariableIndexOffset = uint32(len(*declaration.parameters))
@@ -585,7 +680,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	if localVariableCount > 0 {
 		var ii uint32
 		for ii = 0; ii < localVariableCount; ii++ {
-			lv := Variable{
+			lv := &Variable{
 				typeName:        UNKNOWN_TYPE,
 				variableName:    fmt.Sprintf("local_%d", ii),
 				stackIndex:      uint32(ii + definition.scope.localVariableIndexOffset),

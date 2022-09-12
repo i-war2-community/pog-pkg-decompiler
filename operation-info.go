@@ -111,8 +111,8 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_POP_STACK_N: {name: "OP_POP_STACK_N", dataSize: 1, parser: ParseCountUInt8},
 	OP_CLONE_STACK: {name: "OP_CLONE_STACK", dataSize: 0},
 
-	OP_LITERAL_ZERO:  {name: "OP_LITERAL_ZERO", dataSize: 0, parser: ParseLiteralBool},
-	OP_LITERAL_ONE:   {name: "OP_LITERAL_ONE", dataSize: 0, parser: ParseLiteralBool},
+	OP_LITERAL_ZERO:  {name: "OP_LITERAL_ZERO", dataSize: 0, parser: ParseLiteralZero},
+	OP_LITERAL_ONE:   {name: "OP_LITERAL_ONE", dataSize: 0, parser: ParseLiteralOne},
 	OP_LITERAL_BYTE:  {name: "OP_LITERAL_BYTE", dataSize: 1, parser: ParseLiteralByte},
 	OP_LITERAL_SHORT: {name: "OP_LITERAL_SHORT", dataSize: 2, parser: ParseLiteralShort},
 	OP_LITERAL_INT:   {name: "OP_LITERAL_INT", dataSize: 4, parser: ParseLiteralInt},
@@ -210,23 +210,40 @@ func ParsePopStack(data []byte, codeOffset uint32) OperationData {
 	return PopStackData{}
 }
 
-type LiteralBoolData struct {
+type LiteralInteger interface {
+	GetValue() int
 }
 
-func (d LiteralBoolData) String() string {
+type LiteralBitData struct {
+	value int
+}
+
+func (d LiteralBitData) String() string {
 	return ""
 }
 
-func (d LiteralBoolData) PushCount() int {
+func (d LiteralBitData) PushCount() int {
 	return 1
 }
 
-func (d LiteralBoolData) PopCount() int {
+func (d LiteralBitData) PopCount() int {
 	return 0
 }
 
-func ParseLiteralBool(data []byte, codeOffset uint32) OperationData {
-	return LiteralBoolData{}
+func (d LiteralBitData) GetValue() int {
+	return d.value
+}
+
+func ParseLiteralZero(data []byte, codeOffset uint32) OperationData {
+	return LiteralBitData{
+		value: 0,
+	}
+}
+
+func ParseLiteralOne(data []byte, codeOffset uint32) OperationData {
+	return LiteralBitData{
+		value: 1,
+	}
 }
 
 type LiteralByteData struct {
@@ -243,6 +260,10 @@ func (d LiteralByteData) PushCount() int {
 
 func (d LiteralByteData) PopCount() int {
 	return 0
+}
+
+func (d LiteralByteData) GetValue() int {
+	return int(d.value)
 }
 
 func ParseLiteralByte(data []byte, codeOffset uint32) OperationData {
@@ -267,6 +288,10 @@ func (d LiteralShortData) PopCount() int {
 	return 0
 }
 
+func (d LiteralShortData) GetValue() int {
+	return int(d.value)
+}
+
 func ParseLiteralShort(data []byte, codeOffset uint32) OperationData {
 	return LiteralShortData{
 		value: int16(binary.LittleEndian.Uint16(data)),
@@ -287,6 +312,10 @@ func (d LiteralIntData) PushCount() int {
 
 func (d LiteralIntData) PopCount() int {
 	return 0
+}
+
+func (d LiteralIntData) GetValue() int {
+	return int(d.value)
 }
 
 func ParseLiteralInt(data []byte, codeOffset uint32) OperationData {
