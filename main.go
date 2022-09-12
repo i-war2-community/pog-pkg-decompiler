@@ -420,10 +420,13 @@ func resolveAllTypes() {
 		// Call the type resolution done on the statements
 		for ii := range DECOMPILED_FUNCS {
 			DECOMPILED_FUNCS[ii].ResolveBodyTypes()
-			//}
+		}
 
-			//for ii := range DECOMPILED_FUNCS {
+		for ii := range DECOMPILED_FUNCS {
 			fnc := DECOMPILED_FUNCS[ii]
+			if fnc.declaration.parameters == nil {
+				continue
+			}
 			resolveCount += fnc.ResolveHeaderTypes()
 		}
 		if resolveCount == 0 {
