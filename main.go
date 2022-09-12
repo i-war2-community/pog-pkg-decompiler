@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strings"
 )
@@ -164,7 +163,7 @@ func readSectionHeader(file *os.File) (*SectionHeader, error) {
 		return nil, err
 	}
 	if n != 4 {
-		return nil, fmt.Errorf("Header not long enough")
+		return nil, fmt.Errorf("header not long enough")
 	}
 
 	result.identifier = string(buffer)
@@ -330,7 +329,7 @@ func readCodeSection(file *os.File, writer CodeWriter) error {
 		return err
 	}
 	if n != 4 {
-		return fmt.Errorf("Code not long enough")
+		return fmt.Errorf("code not long enough")
 	}
 	codeLength := binary.BigEndian.Uint32(buffer)
 
@@ -350,7 +349,7 @@ func readCodeSection(file *os.File, writer CodeWriter) error {
 
 		opInfo, ok := OP_MAP[opcode]
 		if !ok {
-			return fmt.Errorf("Error: Unknown opcode 0x%02X at position 0x%08X\n", opcode, offset+uint32(initialOffset))
+			return fmt.Errorf("unknown opcode 0x%02X at position 0x%08X", opcode, offset+uint32(initialOffset))
 		}
 
 		operation := new(Operation)
@@ -507,7 +506,7 @@ func main() {
 
 	results := writer.Bytes()
 
-	err = ioutil.WriteFile(OUTPUT_FILE, results, 0644)
+	err = os.WriteFile(OUTPUT_FILE, results, 0644)
 	if err != nil {
 		fmt.Printf("Error: Failed to write file: %v", err)
 		return

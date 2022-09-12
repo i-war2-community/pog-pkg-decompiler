@@ -495,7 +495,7 @@ func (d FunctionCallData) String() string {
 	if d.declaration.parameters != nil {
 		return fmt.Sprintf("%s %d", d.declaration.GetScopedName(), len(*d.declaration.parameters))
 	} else {
-		return fmt.Sprintf("%s", d.declaration.GetScopedName())
+		return d.declaration.GetScopedName()
 	}
 }
 
