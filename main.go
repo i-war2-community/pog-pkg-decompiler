@@ -501,12 +501,17 @@ func main() {
 	// If we finished resolving everything, but we still have some unknown function parameters, set them to int
 	for _, fnc := range DECOMPILED_FUNCS {
 		if fnc.declaration.parameters != nil {
-			for _, param := range *fnc.declaration.parameters {
+			params := *fnc.declaration.parameters
+			for ii := range params {
+				param := &params[ii]
 				if param.typeName == UNKNOWN_TYPE {
 					param.typeName = "int"
 					param.potentialTypes["int"] = true
+					fmt.Printf("WARN: Failed to resolve the type for parameter %s of function %s, defaulting to int.\n", param.parameterName, fnc.declaration.GetScopedName())
 				}
 			}
+			// Lock in our header types
+			fnc.declaration.autoDetectTypes = false
 		}
 	}
 

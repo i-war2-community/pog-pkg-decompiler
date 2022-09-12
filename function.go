@@ -68,7 +68,22 @@ func findBaseTypeForAssignedTypes(assignedTypes []string) string {
 				baseType = assigned
 				continue
 			}
-			baseType = UNKNOWN_TYPE
+			common := UNKNOWN_TYPE
+			for typeA := baseType; len(typeA) > 0; typeA = HANDLE_MAP[typeA].baseType {
+				for typeB := assigned; len(typeB) > 0; typeB = HANDLE_MAP[typeB].baseType {
+					if typeA == typeB {
+						common = typeA
+						break
+					}
+				}
+				if common != UNKNOWN_TYPE {
+					break
+				}
+			}
+			if common != UNKNOWN_TYPE {
+				baseType = common
+				continue
+			}
 			break
 		}
 		return baseType
@@ -176,7 +191,7 @@ func (fd *FunctionDefinition) ResolveHeaderTypes() int {
 
 			// If this is a function parameter, add the types that were assigned to it
 			if idx < int(fd.scope.localVariableIndexOffset) {
-				assignedTypes = []string{}
+				//assignedTypes = []string{}
 				for key := range (*fd.declaration.parameters)[idx].potentialTypes {
 					assignedTypes = append(assignedTypes, key)
 				}
