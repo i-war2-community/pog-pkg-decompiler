@@ -311,8 +311,8 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1IsHandle := IsHandleType(child1.typeName)
 		child2IsHandle := IsHandleType(child2.typeName)
 
-		child1IsCast := child1.operation.opcode == OP_CAST_HANDLE_TO_BOOL
-		child2IsCast := child2.operation.opcode == OP_CAST_HANDLE_TO_BOOL
+		child1IsCast := child1.operation.opcode == OP_CAST_TO_BOOL
+		child2IsCast := child2.operation.opcode == OP_CAST_TO_BOOL
 
 		// We need to do a special check here to see if we are comparing a handle to "none", which gets compiled down to a zero
 		if child1IsCast || child1IsHandle {
@@ -491,8 +491,8 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 		child1IsHandle := IsHandleType(child1.typeName)
 		child2IsHandle := IsHandleType(child2.typeName)
 
-		child1IsCast := child1.operation.opcode == OP_CAST_HANDLE_TO_BOOL
-		child2IsCast := child2.operation.opcode == OP_CAST_HANDLE_TO_BOOL
+		child1IsCast := child1.operation.opcode == OP_CAST_TO_BOOL
+		child2IsCast := child2.operation.opcode == OP_CAST_TO_BOOL
 
 		if !child1IsCast && !child2IsCast && child1IsHandle && child2IsHandle && child1.typeName != child2.typeName {
 			cw := NewCodeWriter(os.Stdout)

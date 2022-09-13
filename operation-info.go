@@ -80,9 +80,9 @@ const (
 	OP_BITWISE_AND byte = 0x33
 	OP_BITWISE_OR  byte = 0x34
 
-	OP_CAST_INT_TO_FLT     byte = 0x37
-	OP_CAST_FLT_TO_INT     byte = 0x38
-	OP_CAST_HANDLE_TO_BOOL byte = 0x39
+	OP_CAST_INT_TO_FLT byte = 0x37
+	OP_CAST_FLT_TO_INT byte = 0x38
+	OP_CAST_TO_BOOL    byte = 0x39
 
 	OP_VARIABLE_INIT byte = 0x3A
 
@@ -166,9 +166,9 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_BITWISE_AND: {name: "OP_BITWISE_AND", dataSize: 0, parser: ParseOperator},
 	OP_BITWISE_OR:  {name: "OP_BITWISE_OR", dataSize: 0, parser: ParseOperator},
 
-	OP_CAST_INT_TO_FLT:     {name: "OP_CAST_INT_TO_FLT", dataSize: 0, parser: ParseUnaryOperator},
-	OP_CAST_FLT_TO_INT:     {name: "OP_CAST_FLT_TO_INT", dataSize: 0, parser: ParseUnaryOperator},
-	OP_CAST_HANDLE_TO_BOOL: {name: "OP_CAST_HANDLE_TO_BOOL", dataSize: 0, parser: ParseUnaryOperator},
+	OP_CAST_INT_TO_FLT: {name: "OP_CAST_INT_TO_FLT", dataSize: 0, parser: ParseUnaryOperator},
+	OP_CAST_FLT_TO_INT: {name: "OP_CAST_FLT_TO_INT", dataSize: 0, parser: ParseUnaryOperator},
+	OP_CAST_TO_BOOL:    {name: "OP_CAST_TO_BOOL", dataSize: 0, parser: ParseUnaryOperator},
 
 	OP_VARIABLE_INIT: {name: "OP_VARIABLE_INIT", dataSize: 4, omit: false, parser: ParseStringInit},
 
