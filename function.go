@@ -56,37 +56,40 @@ func findBaseTypeForAssignedTypes(assignedTypes []string) string {
 				continue
 			}
 
-			if baseType == UNKNOWN_TYPE {
-				baseType = assigned
-				continue
-			}
-
-			if HandleIsDerivedFrom(assigned, baseType) {
-				continue
-			}
-			if HandleIsDerivedFrom(baseType, assigned) {
-				baseType = assigned
-				continue
-			}
-			common := UNKNOWN_TYPE
-			for typeA := baseType; len(typeA) > 0; typeA = HANDLE_MAP[typeA].baseType {
-				for typeB := assigned; len(typeB) > 0; typeB = HANDLE_MAP[typeB].baseType {
-					if typeA == typeB {
-						common = typeA
-						break
-					}
-				}
-				if common != UNKNOWN_TYPE {
-					break
-				}
-			}
-			if common != UNKNOWN_TYPE {
-				baseType = common
-				continue
-			}
+			baseType = "hobject"
 			break
+
+			// 	if baseType == UNKNOWN_TYPE {
+			// 		baseType = assigned
+			// 		continue
+			// 	}
+
+			// 	if HandleIsDerivedFrom(assigned, baseType) {
+			// 		continue
+			// 	}
+			// 	if HandleIsDerivedFrom(baseType, assigned) {
+			// 		baseType = assigned
+			// 		continue
+			// 	}
+			// 	common := UNKNOWN_TYPE
+			// 	for typeA := baseType; len(typeA) > 0; typeA = HANDLE_MAP[typeA].baseType {
+			// 		for typeB := assigned; len(typeB) > 0; typeB = HANDLE_MAP[typeB].baseType {
+			// 			if typeA == typeB {
+			// 				common = typeA
+			// 				break
+			// 			}
+			// 		}
+			// 		if common != UNKNOWN_TYPE {
+			// 			break
+			// 		}
+			// 	}
+			// 	if common != UNKNOWN_TYPE {
+			// 		baseType = common
+			// 		continue
+			// 	}
+			// 	break
 		}
-		return baseType
+		// return baseType
 	}
 
 	return baseType
@@ -94,26 +97,13 @@ func findBaseTypeForAssignedTypes(assignedTypes []string) string {
 
 func findBaseTypeForReferencedTypes(referencedTypes []string, startingType string) string {
 	if len(referencedTypes) > 0 {
-		baseType := UNKNOWN_TYPE
-		checkStartingType := false
-
-		if startingType != UNKNOWN_TYPE {
-			checkStartingType = false
-		}
+		baseType := startingType
 
 		for idx := 0; idx < len(referencedTypes); idx++ {
 			referenced := referencedTypes[idx]
 
 			if !IsHandleType(referenced) {
 				continue
-			}
-
-			if checkStartingType {
-				if HandleIsDerivedFrom(startingType, referenced) {
-					baseType = referenced
-					checkStartingType = false
-					continue
-				}
 			}
 
 			if baseType == UNKNOWN_TYPE {

@@ -209,8 +209,31 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				param := &(*funcData.declaration.parameters)[ii]
 				child := og.children[len(og.children)-1-ii]
 
-				if child.typeName != UNKNOWN_TYPE {
-					param.potentialTypes[child.typeName] = true
+				commonType := UNKNOWN_TYPE
+
+				if IsHandleType(child.typeName) && IsHandleType(param.typeName) {
+					if HandleIsDerivedFrom(child.typeName, param.typeName) {
+						commonType = child.typeName
+					} else if HandleIsDerivedFrom(param.typeName, child.typeName) {
+						commonType = param.typeName
+					} else {
+						// TODO: Freak out
+					}
+				} else {
+					if child.typeName == param.typeName {
+						commonType = child.typeName
+					} else {
+						if child.typeName != UNKNOWN_TYPE {
+							commonType = child.typeName
+						} else if param.typeName != UNKNOWN_TYPE {
+							commonType = param.typeName
+						}
+					}
+				}
+
+				if commonType != UNKNOWN_TYPE {
+					param.potentialTypes[commonType] = true
+					child.SetPossibleType(scope, commonType)
 				} else {
 					switch child.operation.opcode {
 					case OP_LITERAL_ZERO:
@@ -224,8 +247,6 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				}
 
 				if param.typeName != UNKNOWN_TYPE {
-
-					child.SetPossibleType(scope, param.typeName)
 
 					if IsEnumType(param.typeName) {
 						var literal LiteralInteger = nil
@@ -306,16 +327,14 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
-		if child1IsHandle && child2IsHandle {
-			fmt.Printf("Test")
-
-		} else if child1IsHandle {
+		if child1IsHandle {
 			if child2IsCast {
 				child2.children[0].SetPossibleType(scope, "hobject")
 			} else {
 				child2.SetPossibleType(scope, child1.typeName)
 			}
-		} else if child2IsHandle {
+		}
+		if child2IsHandle {
 			if child2IsCast {
 				child1.children[0].SetPossibleType(scope, "hobject")
 			} else {
