@@ -532,7 +532,7 @@ func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint3
 		}
 
 		if lv.typeName == UNKNOWN_TYPE {
-			fmt.Printf("WARN: Failed to determine type for local variable %s in function %s\n", lv.variableName, declaration.GetScopedName())
+			fmt.Printf("ERROR: Failed to determine type for local variable %s in function %s\n", lv.variableName, declaration.GetScopedName())
 		}
 
 		if assignment, ok := assignments[lv.stackIndex]; ok {

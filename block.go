@@ -310,15 +310,15 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			if child2IsCast {
 				child2.children[0].SetPossibleType(scope, "hobject")
 			} else {
-				child2.SetPossibleType(scope, "hobject")
+				child2.SetPossibleType(scope, child1.typeName)
 			}
 		}
 
 		if child2IsHandle {
-			if child1IsCast {
+			if child2IsCast {
 				child1.children[0].SetPossibleType(scope, "hobject")
 			} else {
-				child1.SetPossibleType(scope, "hobject")
+				child1.SetPossibleType(scope, child2.typeName)
 			}
 		}
 
