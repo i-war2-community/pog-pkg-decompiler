@@ -27,6 +27,8 @@ func IsFunctionCall(operation *Operation) bool {
 	switch operation.opcode {
 	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_IMPORTED, OP_TASK_CALL_LOCAL:
 		return true
+	case OP_CAST_HANDLE_TO_HANDLE:
+		return true
 	}
 
 	return false
@@ -173,7 +175,7 @@ func RenderOperationCode(operation *Operation, scope *Scope) *string {
 	case OP_POP_STACK:
 		result = ""
 
-	case OP_CAST_INT_TO_FLT, OP_CAST_HANDLE_TO_INT, OP_CAST_FLT_TO_INT:
+	case OP_CAST_INT_TO_FLT, OP_CAST_HANDLE_TO_BOOL, OP_CAST_FLT_TO_INT:
 		result = ""
 
 	case OP_JUMP_IF_FALSE:

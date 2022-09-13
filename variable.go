@@ -1,5 +1,10 @@
 package main
 
+import (
+	"fmt"
+	"strings"
+)
+
 type HandleTypeInfo struct {
 	baseType      string
 	sourcePackage string
@@ -123,4 +128,26 @@ func HandleIsDerivedFrom(handleType string, baseType string) bool {
 		return false
 	}
 	return HandleIsDerivedFrom(HANDLE_MAP[handleType].baseType, baseType)
+}
+
+func GetCastFunctionForHandleType(handleType string) string {
+	hdata, ok := HANDLE_MAP[handleType]
+	if !ok {
+		fmt.Printf("ERROR: Failed to get cast function for handle type %s: handle type not found.\n", handleType)
+		return UNKNOWN_TYPE
+	}
+	packageData, ok := PACKAGES[strings.ToLower(hdata.sourcePackage)]
+	if !ok {
+		fmt.Printf("ERROR: Failed to get cast function for handle type %s: source package %s not found.\n", handleType, hdata.sourcePackage)
+		return UNKNOWN_TYPE
+	}
+
+	for _, fnc := range packageData.functions {
+		if fnc.name == "Cast" {
+			return fnc.GetScopedName()
+		}
+	}
+
+	fmt.Printf("ERROR: Failed to get cast function for handle type %s: \"Cast\" function not found in source package %s.\n", handleType, hdata.sourcePackage)
+	return UNKNOWN_TYPE
 }

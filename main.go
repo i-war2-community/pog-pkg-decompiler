@@ -71,10 +71,10 @@ func renderPackageImports(writer CodeWriter) {
 		import_map[pkgName] = true
 	}
 
-	if _, ok := import_map["Debug"]; !ok {
-		imports = append(imports, "Debug")
-		import_map["Debug"] = true
-	}
+	// if _, ok := import_map["Debug"]; !ok {
+	// 	imports = append(imports, "Debug")
+	// 	import_map["Debug"] = true
+	// }
 
 	// Now check for any missing dependencies
 	for ii := 0; ii < len(imports); ii++ {
@@ -282,7 +282,7 @@ func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error
 		//fmt.Printf("%s", name)
 		lookup, ok := PACKAGES[name]
 		if !ok {
-			fmt.Printf("ERROR: Exporting package '%s' not found in includes. Package name might be output with incorrect case!\n", name)
+			fmt.Printf("WARN: Exporting package '%s' not found in includes. Package name might be output with incorrect case!\n", name)
 			//os.Exit(1)
 		} else {
 			name = lookup.name
@@ -440,6 +440,13 @@ func resolveAllTypes() {
 	}
 }
 
+func checkAllCode() {
+	// Check the code of each function
+	for ii := range DECOMPILED_FUNCS {
+		DECOMPILED_FUNCS[ii].CheckCode()
+	}
+}
+
 func main() {
 	flag.StringVar(&INCLUDES_DIR, "includes", "", "The includes directory with package headers.")
 	flag.StringVar(&OUTPUT_FILE, "output", "", "The file path to which the pog file will be written.")
@@ -488,8 +495,16 @@ func main() {
 	f.Seek(4, 1)
 	form.length -= 4
 
-	// TODO: Move this somewhere else
-	writer := NewCodeWriter()
+	fmt.Printf("Writing pog: %s\n", OUTPUT_FILE)
+
+	outputFile, err := os.OpenFile(OUTPUT_FILE, os.O_RDWR|os.O_CREATE, 0644)
+
+	if err != nil {
+		fmt.Printf("Error: Failed to write file: %v\n", err)
+		return
+	}
+	writer := NewCodeWriter(outputFile)
+	defer outputFile.Close()
 
 	err = readSections(f, form.length, writer)
 
@@ -527,6 +542,8 @@ func main() {
 	// Fix functions with unknown return types
 	SetAllUnknownFunctionReturnTypesToVoid()
 
+	checkAllCode()
+
 	// We need to detect the dependencies so we can reorder imports accordingly
 	DetectPackageDependencies()
 
@@ -551,13 +568,5 @@ func main() {
 			continue
 		}
 		DECOMPILED_FUNCS[ii].Render(writer)
-	}
-
-	results := writer.Bytes()
-
-	err = os.WriteFile(OUTPUT_FILE, results, 0644)
-	if err != nil {
-		fmt.Printf("Error: Failed to write file: %v", err)
-		return
 	}
 }

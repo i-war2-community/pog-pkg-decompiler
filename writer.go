@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -10,18 +11,18 @@ type CodeWriter interface {
 	PopIndent()
 	Append(s string)
 	Appendf(format string, a ...interface{})
-	String() string
-	Bytes() []byte
 }
 
 type codeWriter struct {
-	sb     strings.Builder
-	indent int
-	last   string
+	ioWrite io.Writer
+	indent  int
+	last    string
 }
 
-func NewCodeWriter() CodeWriter {
-	return &codeWriter{}
+func NewCodeWriter(w io.Writer) CodeWriter {
+	return &codeWriter{
+		ioWrite: w,
+	}
 }
 
 func (cw *codeWriter) PushIndent() {
@@ -36,8 +37,7 @@ func (cw *codeWriter) PopIndent() {
 }
 
 func (cw *codeWriter) internalAppend(s string) {
-	cw.sb.WriteString(s)
-	//fmt.Print(s)
+	fmt.Fprint(cw.ioWrite, s)
 	cw.last = s
 }
 
@@ -57,12 +57,4 @@ func (cw *codeWriter) Append(s string) {
 func (cw *codeWriter) Appendf(format string, a ...interface{}) {
 	cw.handleIndent()
 	cw.internalAppend(fmt.Sprintf(format, a...))
-}
-
-func (cw *codeWriter) String() string {
-	return cw.sb.String()
-}
-
-func (cw *codeWriter) Bytes() []byte {
-	return []byte(cw.sb.String())
 }

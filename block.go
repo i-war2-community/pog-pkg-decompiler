@@ -33,6 +33,7 @@ type BlockElement interface {
 	IsBlock() bool
 	RendersAsBlock() bool
 	ResolveTypes(scope *Scope)
+	CheckCode(scope *Scope)
 }
 
 type OpGraph struct {
@@ -289,8 +290,8 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1IsHandle := IsHandleType(child1.typeName)
 		child2IsHandle := IsHandleType(child2.typeName)
 
-		child1IsCast := child1.operation.opcode == OP_CAST_HANDLE_TO_INT
-		child2IsCast := child2.operation.opcode == OP_CAST_HANDLE_TO_INT
+		child1IsCast := child1.operation.opcode == OP_CAST_HANDLE_TO_BOOL
+		child2IsCast := child2.operation.opcode == OP_CAST_HANDLE_TO_BOOL
 
 		// We need to do a special check here to see if we are comparing a handle to "none", which gets compiled down to a zero
 		if child1IsCast || child1IsHandle {
@@ -457,6 +458,66 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	}
 }
 
+func (og *OpGraph) CheckCode(scope *Scope) {
+	for idx := range og.children {
+		og.children[idx].CheckCode(scope)
+	}
+
+	switch og.operation.opcode {
+	case OP_INT_EQUALS, OP_INT_NOT_EQUALS:
+		child1 := og.children[0]
+		child2 := og.children[1]
+
+		child1IsHandle := IsHandleType(child1.typeName)
+		child2IsHandle := IsHandleType(child2.typeName)
+
+		child1IsCast := child1.operation.opcode == OP_CAST_HANDLE_TO_BOOL
+		child2IsCast := child2.operation.opcode == OP_CAST_HANDLE_TO_BOOL
+
+		if !child1IsCast && !child2IsCast && child1IsHandle && child2IsHandle && child1.typeName != child2.typeName {
+			// cw := NewCodeWriter(os.Stdout)
+			// cw.Appendf("ERROR: Mismatched handle types in equivalence check. This will cause both handles to be cast to bools and then compared:\n")
+			// cw.PushIndent()
+			// printGraphNode(og, cw, false)
+			// cw.Append("\n")
+			// cw.Appendf("L Type: %s\n", child1.typeName)
+			// cw.Appendf("R Type: %s\n", child2.typeName)
+			// cw.PopIndent()
+			// cw.Append("\n")
+
+			childIdx := -1
+			targetType := ""
+
+			if HandleIsDerivedFrom(child1.typeName, child2.typeName) {
+				childIdx = 0
+				targetType = child2.typeName
+
+			} else if HandleIsDerivedFrom(child2.typeName, child1.typeName) {
+				childIdx = 1
+				targetType = child1.typeName
+			} else {
+				fmt.Printf("ERROR: Failed to insert cast to fix mismatched handle type comparison.\n")
+				return
+			}
+
+			// Get the appropriate function to make the cast
+			castFunction := GetCastFunctionForHandleType(targetType)
+
+			// HACK: Insert an operation to perform the cast once we render the code
+			castOp := &OpGraph{
+				operation: &Operation{
+					opcode: OP_CAST_HANDLE_TO_HANDLE,
+				},
+				children: []*OpGraph{
+					og.children[childIdx],
+				},
+				code: &castFunction,
+			}
+			og.children[childIdx] = castOp
+		}
+	}
+}
+
 func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
 
 	if len(node.children) == 2 && !IsFunctionCall(node.operation) {
@@ -537,6 +598,10 @@ func (s *Statement) ResolveTypes(scope *Scope) {
 	s.graph.ResolveTypes(scope)
 }
 
+func (s *Statement) CheckCode(scope *Scope) {
+	s.graph.CheckCode(scope)
+}
+
 func shouldHaveNewlineBetween(element1 BlockElement, element2 BlockElement) bool {
 	if element1.RendersAsBlock() && element2.RendersAsBlock() {
 		_, isIf := element1.(*IfBlock)
@@ -611,6 +676,11 @@ func (ib *IfBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, ib.body)
 }
 
+func (ib *IfBlock) CheckCode(scope *Scope) {
+	ib.conditional.CheckCode(scope)
+	CheckCode(scope, ib.body)
+}
+
 type ElseBlock struct {
 	body []BlockElement
 }
@@ -665,6 +735,10 @@ func (eb *ElseBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, eb.body)
 }
 
+func (eb *ElseBlock) CheckCode(scope *Scope) {
+	CheckCode(scope, eb.body)
+}
+
 type DebugBlock struct {
 	body []BlockElement
 }
@@ -704,6 +778,10 @@ func (db *DebugBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
 }
 
+func (db *DebugBlock) CheckCode(scope *Scope) {
+	CheckCode(scope, db.body)
+}
+
 type AtomicBlock struct {
 	body []BlockElement
 }
@@ -733,6 +811,10 @@ func (db *AtomicBlock) RendersAsBlock() bool {
 
 func (db *AtomicBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
+}
+
+func (db *AtomicBlock) CheckCode(scope *Scope) {
+	CheckCode(scope, db.body)
 }
 
 type ScheduleBlock struct {
@@ -766,6 +848,10 @@ func (db *ScheduleBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
 }
 
+func (db *ScheduleBlock) CheckCode(scope *Scope) {
+	CheckCode(scope, db.body)
+}
+
 type ScheduleEveryBlock struct {
 	interval float32
 	body     []BlockElement
@@ -796,6 +882,10 @@ func (db *ScheduleEveryBlock) RendersAsBlock() bool {
 
 func (db *ScheduleEveryBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, db.body)
+}
+
+func (db *ScheduleEveryBlock) CheckCode(scope *Scope) {
+	CheckCode(scope, db.body)
 }
 
 type WhileLoop struct {
@@ -838,6 +928,11 @@ func (wl *WhileLoop) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, wl.body)
 }
 
+func (wl *WhileLoop) CheckCode(scope *Scope) {
+	wl.conditional.CheckCode(scope)
+	CheckCode(scope, wl.body)
+}
+
 type DoWhileLoop struct {
 	conditional *Statement
 	body        []BlockElement
@@ -878,6 +973,11 @@ func (wl *DoWhileLoop) RendersAsBlock() bool {
 func (wl *DoWhileLoop) ResolveTypes(scope *Scope) {
 	wl.conditional.ResolveTypes(scope)
 	ResolveTypes(scope, wl.body)
+}
+
+func (wl *DoWhileLoop) CheckCode(scope *Scope) {
+	wl.conditional.CheckCode(scope)
+	CheckCode(scope, wl.body)
 }
 
 type ForLoop struct {
@@ -930,6 +1030,13 @@ func (fl *ForLoop) ResolveTypes(scope *Scope) {
 	fl.conditional.ResolveTypes(scope)
 	fl.increment.ResolveTypes(scope)
 	ResolveTypes(scope, fl.body)
+}
+
+func (fl *ForLoop) CheckCode(scope *Scope) {
+	fl.init.CheckCode(scope)
+	fl.conditional.CheckCode(scope)
+	fl.increment.CheckCode(scope)
+	CheckCode(scope, fl.body)
 }
 
 type SwitchBlock struct {
@@ -993,6 +1100,13 @@ func (sb *SwitchBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, sb.body)
 }
 
+func (sb *SwitchBlock) CheckCode(scope *Scope) {
+	if sb.conditional != nil {
+		sb.conditional.CheckCode(scope)
+	}
+	CheckCode(scope, sb.body)
+}
+
 type CaseBlock struct {
 	startingOffset uint32
 	jumpLocation   uint32
@@ -1038,6 +1152,10 @@ func (cb *CaseBlock) RendersAsBlock() bool {
 
 func (cb *CaseBlock) ResolveTypes(scope *Scope) {
 	ResolveTypes(scope, cb.body)
+}
+
+func (cb *CaseBlock) CheckCode(scope *Scope) {
+	CheckCode(scope, cb.body)
 }
 
 func offsetToOpIndex(offset uint32, ops []Operation) int {
@@ -1704,5 +1822,11 @@ func ParseOperations(scope *Scope, context *BlockContext, ops []Operation, minOp
 func ResolveTypes(scope *Scope, elements []BlockElement) {
 	for idx := range elements {
 		elements[idx].ResolveTypes(scope)
+	}
+}
+
+func CheckCode(scope *Scope, elements []BlockElement) {
+	for idx := range elements {
+		elements[idx].CheckCode(scope)
 	}
 }

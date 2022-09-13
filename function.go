@@ -156,6 +156,11 @@ func (fd *FunctionDefinition) ResolveBodyTypes() {
 	ResolveTypes(fd.scope, fd.body)
 }
 
+func (fd *FunctionDefinition) CheckCode() {
+	// Resolve variable types
+	CheckCode(fd.scope, fd.body)
+}
+
 func getEnumType(possibleTypes map[string]bool) string {
 	// Check for enum type
 	enumTypeCount := 0
@@ -382,8 +387,8 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, fd.declaration, writer)
 
-	writer.Appendf(`debug atomic Debug.PrintString("Inside function: %s %s\n");`, EXPORTING_PACKAGE, renderFunctionDefinitionHeader(fd.declaration))
-	writer.Append("\n")
+	//writer.Appendf(`debug atomic Debug.PrintString("Inside function: %s %s\n");`, EXPORTING_PACKAGE, renderFunctionDefinitionHeader(fd.declaration))
+	//writer.Append("\n")
 
 	RenderBlockElements(fd.body, writer)
 
