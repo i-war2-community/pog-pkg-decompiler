@@ -2,5 +2,6 @@
 docs
 output
 pog-pkg-decompiler.exe
-include
+pog-pkg-decompiler
+test
 __debug_bin.exe

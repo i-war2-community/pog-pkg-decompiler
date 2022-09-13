@@ -94,9 +94,7 @@ func (og *OpGraph) SetPossibleType(scope *Scope, typeName string) {
 
 	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL:
 		fncData := og.operation.data.(FunctionCallData)
-		if IsEnumType(typeName) {
-			fncData.declaration.possibleReturnTypes[typeName] = true
-		}
+		fncData.declaration.returnInfo.AddReferencedType(typeName)
 	}
 }
 
@@ -107,7 +105,7 @@ func (og *OpGraph) ShouldRender() bool {
 	}
 
 	// Don't render string init statements
-	if og.operation.opcode == OP_POP_STACK && og.children[0].operation.opcode == OP_VARIABLE_WRITE && og.children[0].children[0].operation.opcode == OP_HANDLE_INIT {
+	if og.operation.opcode == OP_POP_STACK && og.children[0].operation.opcode == OP_VARIABLE_WRITE && og.children[0].children[0].operation.opcode == OP_VARIABLE_INIT {
 		return false
 	}
 	return true
@@ -178,6 +176,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	case OP_CAST_FLT_TO_INT, OP_BITWISE_AND, OP_BITWISE_OR, OP_INT_NEG, OP_LITERAL_BYTE, OP_LITERAL_SHORT, OP_LITERAL_INT:
 		og.typeName = "int"
 
+	case OP_LITERAL_ONE, OP_LITERAL_ZERO:
+		og.typeName = "bool"
+
 	case OP_INT_ADD, OP_INT_SUB, OP_INT_MUL, OP_INT_DIV, OP_INT_MOD:
 		og.typeName = "int"
 		og.children[0].SetPossibleType(scope, "int")
@@ -196,12 +197,15 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 	case OP_FUNCTION_CALL_IMPORTED, OP_TASK_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_LOCAL:
 		funcData := og.operation.data.(FunctionCallData)
-		if funcData.declaration.returnTypeName != UNKNOWN_TYPE {
-			if funcData.declaration.returnTypeName == "task" {
-				og.typeName = "htask"
-			} else {
-				og.typeName = funcData.declaration.returnTypeName
-			}
+		funcReturn := funcData.declaration.GetReturnType()
+
+		// These will always return an htask
+		if og.operation.opcode == OP_TASK_CALL_IMPORTED || og.operation.opcode == OP_TASK_CALL_LOCAL {
+			funcReturn = "htask"
+		}
+
+		if funcReturn != UNKNOWN_TYPE {
+			og.typeName = funcReturn
 		}
 
 		if funcData.declaration.parameters != nil && len(*funcData.declaration.parameters) == len(og.children) {
@@ -209,23 +213,43 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				param := &(*funcData.declaration.parameters)[ii]
 				child := og.children[len(og.children)-1-ii]
 
-				if child.typeName != UNKNOWN_TYPE {
-					param.potentialTypes[child.typeName] = true
+				commonType := UNKNOWN_TYPE
+
+				// TODO: More here....
+				if IsHandleType(child.typeName) && IsHandleType(param.typeName) {
+					if HandleIsDerivedFrom(child.typeName, param.typeName) {
+						commonType = child.typeName
+					} else if HandleIsDerivedFrom(param.typeName, child.typeName) {
+						commonType = param.typeName
+					} else {
+						// TODO: Freak out
+					}
+				} else {
+					if child.typeName == param.typeName {
+						commonType = child.typeName
+					} else {
+						if child.typeName != UNKNOWN_TYPE {
+							commonType = child.typeName
+						} else if param.typeName != UNKNOWN_TYPE {
+							commonType = param.typeName
+						}
+					}
+				}
+
+				if commonType != UNKNOWN_TYPE {
+					if funcData.declaration.autoDetectTypes {
+						param.variable.AddAssignedType(commonType)
+					}
+					child.SetPossibleType(scope, commonType)
 				} else {
 					switch child.operation.opcode {
-					case OP_LITERAL_ZERO:
-						param.potentialTypes["bool"] = true
-						param.potentialTypes["int"] = true
-
-					case OP_LITERAL_ONE:
-						param.potentialTypes["bool"] = true
-						param.potentialTypes["int"] = true
+					case OP_LITERAL_ZERO, OP_LITERAL_ONE:
+						param.variable.AddAssignedType("bool")
+						param.variable.AddAssignedType("int")
 					}
 				}
 
 				if param.typeName != UNKNOWN_TYPE {
-
-					child.SetPossibleType(scope, param.typeName)
 
 					if IsEnumType(param.typeName) {
 						var literal LiteralInteger = nil
@@ -290,8 +314,8 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1IsHandle := IsHandleType(child1.typeName)
 		child2IsHandle := IsHandleType(child2.typeName)
 
-		child1IsCast := child1.operation.opcode == OP_CAST_HANDLE_TO_BOOL
-		child2IsCast := child2.operation.opcode == OP_CAST_HANDLE_TO_BOOL
+		child1IsCast := child1.operation.opcode == OP_CAST_TO_BOOL
+		child2IsCast := child2.operation.opcode == OP_CAST_TO_BOOL
 
 		// We need to do a special check here to see if we are comparing a handle to "none", which gets compiled down to a zero
 		if child1IsCast || child1IsHandle {
@@ -313,7 +337,6 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				child2.SetPossibleType(scope, child1.typeName)
 			}
 		}
-
 		if child2IsHandle {
 			if child2IsCast {
 				child1.children[0].SetPossibleType(scope, "hobject")
@@ -344,7 +367,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		varData := og.operation.data.(VariableWriteData)
 		v := scope.variables[varData.index]
 		// Add to the variable's ref count if this isn't just from a handle init
-		if og.children[0].operation.opcode != OP_HANDLE_INIT {
+		if og.children[0].operation.opcode != OP_VARIABLE_INIT {
 			v.refCount++
 		}
 
@@ -366,7 +389,6 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		case OP_LITERAL_ONE:
 			// It could be either of these really
 			v.AddAssignedType("bool")
-			v.AddAssignedType("int")
 
 			// If we are assigning literal true or literal false
 			if v.typeName == "bool" {
@@ -381,6 +403,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		}
 
 		if childType != UNKNOWN_TYPE {
+			if v.typeName != UNKNOWN_TYPE {
+				og.children[0].SetPossibleType(scope, v.typeName)
+			}
 			og.typeName = childType
 			if og.typeName != UNKNOWN_TYPE {
 				v.AddAssignedType(og.typeName)
@@ -390,59 +415,54 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		}
 
 	case OP_JUMP:
-		if og.code != nil && strings.HasPrefix(*og.code, "return") {
-			//if scope.function.returnTypeName == UNKNOWN_TYPE {
-			returnType := ""
-			if len(og.children) > 0 {
-				switch og.children[0].operation.opcode {
-				case OP_LITERAL_ZERO, OP_LITERAL_ONE:
-					scope.function.possibleReturnTypes["bool"] = true
-					scope.function.possibleReturnTypes["int"] = true
-				default:
-					returnType = og.children[0].typeName
-					if returnType != UNKNOWN_TYPE {
-						scope.function.possibleReturnTypes[returnType] = true
-					}
+		// If this is a return statement, we need to add assigned types to our function's return
+		if og.code != nil && strings.HasPrefix(*og.code, "return") && len(og.children) == 1 {
+			returnOp := og.children[0]
+			returnType := scope.function.returnInfo.typeName
+			switch returnOp.operation.opcode {
+			case OP_LITERAL_ZERO, OP_LITERAL_ONE:
+				scope.function.returnInfo.AddAssignedType("bool")
+				scope.function.returnInfo.AddAssignedType("int")
+			default:
+				if returnOp.typeName != UNKNOWN_TYPE {
+					scope.function.returnInfo.AddAssignedType(returnOp.typeName)
 				}
 			}
-			//} else {
-			if scope.function.returnTypeName != UNKNOWN_TYPE {
-				if len(og.children) > 0 {
-					returnOp := og.children[0]
+			// If the function has a known return type, see if we need to convert any integers to bools or enums
+			if returnType != UNKNOWN_TYPE {
+				// Make sure local variables and local function return types are impacted by being returned here
+				returnOp.SetPossibleType(scope, returnType)
 
-					if IsEnumType(scope.function.returnTypeName) {
-
-						// Make sure any local variable knows it should be an enum type
-						returnOp.SetPossibleType(scope, scope.function.returnTypeName)
-
-						if IsLiteralInteger(returnOp.operation) {
-							value := GetLiteralIntegerValue(returnOp.operation)
-							enumData := ENUM_MAP[scope.function.returnTypeName]
-							if value >= 0 {
-								name := enumData.valueToName[uint32(value)]
-								if len(name) > 0 {
-									returnOp.code = &name
-								}
+				if IsEnumType(returnType) {
+					// Convert literal integers to enums
+					if IsLiteralInteger(returnOp.operation) {
+						value := GetLiteralIntegerValue(returnOp.operation)
+						enumData := ENUM_MAP[returnType]
+						if value >= 0 {
+							name := enumData.valueToName[uint32(value)]
+							if len(name) > 0 {
+								returnOp.code = &name
 							}
 						}
-					} else {
-						switch returnOp.operation.opcode {
-						case OP_LITERAL_ZERO:
-							if IsHandleType(scope.function.returnTypeName) {
-								returnOp.code = &noneCode
-							} else if scope.function.returnTypeName == "bool" {
-								returnOp.code = &falseCode
-							}
+					}
+				} else {
+					switch returnOp.operation.opcode {
+					case OP_LITERAL_ZERO:
+						// Convert zero to none or false
+						if IsHandleType(returnType) {
+							returnOp.code = &noneCode
+						} else if returnType == "bool" {
+							returnOp.code = &falseCode
+						}
 
-						case OP_LITERAL_ONE:
-							if scope.function.returnTypeName == "bool" {
-								returnOp.code = &trueCode
-							}
+					case OP_LITERAL_ONE:
+						// Convert one to true
+						if returnType == "bool" {
+							returnOp.code = &trueCode
 						}
 					}
 				}
 			}
-			//}
 		}
 
 	case OP_JUMP_IF_FALSE, OP_JUMP_IF_TRUE:
@@ -471,101 +491,107 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 		child1IsHandle := IsHandleType(child1.typeName)
 		child2IsHandle := IsHandleType(child2.typeName)
 
-		child1IsCast := child1.operation.opcode == OP_CAST_HANDLE_TO_BOOL
-		child2IsCast := child2.operation.opcode == OP_CAST_HANDLE_TO_BOOL
+		child1IsCast := child1.operation.opcode == OP_CAST_TO_BOOL
+		child2IsCast := child2.operation.opcode == OP_CAST_TO_BOOL
 
 		if !child1IsCast && !child2IsCast && child1IsHandle && child2IsHandle && child1.typeName != child2.typeName {
-			// cw := NewCodeWriter(os.Stdout)
-			// cw.Appendf("ERROR: Mismatched handle types in equivalence check. This will cause both handles to be cast to bools and then compared:\n")
-			// cw.PushIndent()
-			// printGraphNode(og, cw, false)
-			// cw.Append("\n")
-			// cw.Appendf("L Type: %s\n", child1.typeName)
-			// cw.Appendf("R Type: %s\n", child2.typeName)
-			// cw.PopIndent()
-			// cw.Append("\n")
-
-			childIdx := -1
-			targetType := ""
-
-			if HandleIsDerivedFrom(child1.typeName, child2.typeName) {
-				childIdx = 0
-				targetType = child2.typeName
-
-			} else if HandleIsDerivedFrom(child2.typeName, child1.typeName) {
-				childIdx = 1
-				targetType = child1.typeName
-			} else {
-				fmt.Printf("ERROR: Failed to insert cast to fix mismatched handle type comparison.\n")
-				return
-			}
-
-			// Get the appropriate function to make the cast
-			castFunction := GetCastFunctionForHandleType(targetType)
-
-			// HACK: Insert an operation to perform the cast once we render the code
-			castOp := &OpGraph{
-				operation: &Operation{
-					opcode: OP_CAST_HANDLE_TO_HANDLE,
-				},
-				children: []*OpGraph{
-					og.children[childIdx],
-				},
-				code: &castFunction,
-			}
-			og.children[childIdx] = castOp
+			cw := NewCodeWriter(os.Stdout)
+			cw.Appendf("ERROR: Mismatched handle types in equivalence check. This will cause both handles to be cast to bools and then compared:\n")
+			cw.PushIndent()
+			og.Render(cw, false)
+			cw.Append("\n")
+			cw.Appendf("L Type: %s\n", child1.typeName)
+			cw.Appendf("R Type: %s\n", child2.typeName)
+			cw.PopIndent()
+			cw.Append("\n")
 		}
 	}
 }
 
-func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
-
-	if len(node.children) == 2 && !IsFunctionCall(node.operation) {
-		if !onlyChild || node.operation.opcode == OP_STRING_EQUALS {
-			writer.Append("(")
-		}
-		printGraphNode(node.children[0], writer, false)
-		writer.Append(" ")
+func (node *OpGraph) ShouldRenderBeforeChidlren() bool {
+	if IsFunctionCall(node.operation) {
+		return true
 	}
 
-	// Write ourselves
+	return len(node.children) != 2
+}
+
+func (node *OpGraph) ShouldUseParentheses(onlyChild bool) bool {
+	if IsFunctionCall(node.operation) {
+		return true
+	}
+
+	popCount := 0
+	if node.operation.data != nil {
+		popCount = node.operation.data.PopCount()
+	}
+
+	// For unary operators that are being applied to some math or logical operator
+	if node.code != nil && len(*node.code) > 0 && popCount == 1 && len(node.children[0].children) > 1 && !node.children[0].ShouldRenderBeforeChidlren() {
+		return true
+	}
+
+	return !onlyChild && popCount > 1
+}
+
+func (node *OpGraph) renderSelf(writer CodeWriter) {
 	if node.code != nil {
 		writer.Append(*node.code)
 	} else {
+		// If we hit this, the opcode hasn't been properly set up so we will just print out something that fails to compile
 		opInfo := OP_MAP[node.operation.opcode]
 		writer.Appendf("%s", opInfo.name)
 		if node.operation.data != nil && len(node.operation.data.String()) > 0 {
 			writer.Appendf("[%s]", node.operation.data.String())
 		}
 	}
+}
 
-	if len(node.children) == 1 && !IsFunctionCall(node.operation) {
-		printGraphNode(node.children[0], writer, true)
-	}
+func (node *OpGraph) Render(writer CodeWriter, onlyChild bool) {
 
-	if len(node.children) == 2 && !IsFunctionCall(node.operation) {
+	if !node.ShouldRenderBeforeChidlren() {
+		if node.ShouldUseParentheses(onlyChild) {
+			writer.Append("(")
+		}
+
+		node.children[0].Render(writer, false)
+
 		writer.Append(" ")
-		printGraphNode(node.children[1], writer, false)
-		if !onlyChild || node.operation.opcode == OP_STRING_EQUALS {
+		node.renderSelf(writer)
+		writer.Append(" ")
+
+		node.children[1].Render(writer, false)
+
+		if node.ShouldUseParentheses(onlyChild) {
 			writer.Append(")")
 		}
-	}
+	} else {
+		// Render ourselves
+		node.renderSelf(writer)
 
-	if IsFunctionCall(node.operation) {
-		writer.Append("(")
-		if len(node.children) > 0 {
-			writer.Append(" ")
+		// Render our open parenthesis
+		if node.ShouldUseParentheses(onlyChild) {
+			writer.Append("(")
+			if len(node.children) > 0 {
+				writer.Append(" ")
+			}
 		}
+
+		// Render our children
 		for ii := len(node.children) - 1; ii >= 0; ii-- {
-			printGraphNode(node.children[ii], writer, true)
+			node.children[ii].Render(writer, true)
 			if ii > 0 {
 				writer.Append(", ")
 			}
 		}
-		if len(node.children) > 0 {
-			writer.Append(" ")
+
+		// Render our closed parenthesis
+		if node.ShouldUseParentheses(onlyChild) {
+			if len(node.children) > 0 {
+				writer.Append(" ")
+			}
+			writer.Append(")")
 		}
-		writer.Append(")")
 	}
 }
 
@@ -574,7 +600,7 @@ type Statement struct {
 }
 
 func (s *Statement) Render(writer CodeWriter) {
-	printGraphNode(s.graph, writer, true)
+	s.graph.Render(writer, true)
 }
 
 func (s *Statement) RenderAssemblyOffsets(writer CodeWriter) {
@@ -860,7 +886,7 @@ type ScheduleEveryBlock struct {
 func (eb *ScheduleEveryBlock) Render(writer CodeWriter) {
 
 	// Write out the top of the block
-	writer.Appendf("every %f:\n", eb.interval)
+	writer.Appendf("every %s:\n", RenderFloat(eb.interval))
 	writer.Append("{\n")
 	writer.PushIndent()
 
@@ -987,6 +1013,42 @@ type ForLoop struct {
 	body        []BlockElement
 }
 
+func (fl *ForLoop) renderIncrement(writer CodeWriter) {
+	// Since they don't have an opcode for ++, try to detect it here at least
+	assignment := fl.increment.graph.children[0]
+	incrementVariable := ""
+	decrementVariable := ""
+
+	if assignment.operation.opcode == OP_VARIABLE_WRITE {
+		varWriteData := assignment.operation.data.(VariableWriteData)
+		if assignment.children[0].operation.opcode == OP_INT_ADD {
+			add := assignment.children[0]
+			if add.children[0].operation.opcode == OP_VARIABLE_READ {
+				varReadData := add.children[0].operation.data.(VariableReadData)
+				if varReadData.index == varWriteData.index {
+					if IsLiteralInteger(add.children[1].operation) {
+						value := GetLiteralIntegerValue(add.children[1].operation)
+						switch value {
+						case 1:
+							incrementVariable = *add.children[0].code
+						case -1:
+							decrementVariable = *add.children[0].code
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(incrementVariable) > 0 {
+		writer.Appendf("++%s", incrementVariable)
+	} else if len(decrementVariable) > 0 {
+		writer.Appendf("--%s", decrementVariable)
+	} else {
+		fl.increment.Render(writer)
+	}
+}
+
 func (fl *ForLoop) Render(writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("for ( ")
@@ -994,7 +1056,7 @@ func (fl *ForLoop) Render(writer CodeWriter) {
 	writer.Append("; ")
 	fl.conditional.Render(writer)
 	writer.Append("; ")
-	fl.increment.Render(writer)
+	fl.renderIncrement(writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
 		fl.init.RenderAssemblyOffsets(writer)

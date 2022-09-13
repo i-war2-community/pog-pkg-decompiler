@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -12,6 +13,9 @@ import (
 var INCLUDES_DIR string
 var OUTPUT_FILE string
 var OUTPUT_ASSEMBLY bool
+var ASSEMBLY_ONLY bool
+var ASSEMBLY_OFFSET_PREFIX bool
+var DEBUG_LOGGING bool
 
 var EXPORTING_PACKAGE string
 var IMPORTING_PACKAGE string
@@ -71,10 +75,16 @@ func renderPackageImports(writer CodeWriter) {
 		import_map[pkgName] = true
 	}
 
-	// if _, ok := import_map["Debug"]; !ok {
-	// 	imports = append(imports, "Debug")
-	// 	import_map["Debug"] = true
-	// }
+	// This is needed to call the logging function in script
+	if DEBUG_LOGGING {
+		if _, ok := import_map["Debug"]; !ok {
+			imports = append(imports, "Debug")
+			import_map["Debug"] = true
+		}
+	}
+
+	// Sort the initial set of imports so the output will be deterministic (maps won't iterate in the same order each time)
+	sort.Strings(imports)
 
 	// Now check for any missing dependencies
 	for ii := 0; ii < len(imports); ii++ {
@@ -132,12 +142,18 @@ func renderEnums(writer CodeWriter) {
 			writer.Appendf("enum %s\n", enumName)
 			writer.Append("{\n")
 			writer.PushIndent()
-			keys := []string{}
-			for k := range ENUM_MAP[enumName].nameToValue {
+			keys := []uint32{}
+			for k := range ENUM_MAP[enumName].valueToName {
 				keys = append(keys, k)
 			}
+
+			// Sort the array
+			sort.Slice(keys, func(i, j int) bool {
+				return keys[i] < keys[j]
+			})
+
 			for ii, k := range keys {
-				writer.Appendf("%s = 0x%08X", k, ENUM_MAP[enumName].nameToValue[k])
+				writer.Appendf("%s = 0x%08X", ENUM_MAP[enumName].valueToName[k], k)
 				if ii < len(keys)-1 {
 					writer.Append(",\n")
 				} else {
@@ -207,7 +223,7 @@ func readSectionHeader(file *os.File) (*SectionHeader, error) {
 	return result, nil
 }
 
-func readSections(file *os.File, maximumLength uint32, writer CodeWriter) error {
+func readSections(file *os.File, maximumLength uint32) error {
 
 	var length uint32 = 0
 
@@ -226,7 +242,7 @@ func readSections(file *os.File, maximumLength uint32, writer CodeWriter) error 
 			return err
 		}
 
-		err = readSection(file, section, writer)
+		err = readSection(file, section)
 		if err != nil {
 			fmt.Printf("Error: Failed to read section: %v", err)
 			return err
@@ -243,7 +259,7 @@ func readSections(file *os.File, maximumLength uint32, writer CodeWriter) error 
 	return nil
 }
 
-func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error {
+func readSection(file *os.File, section *SectionHeader) error {
 	var err error = nil
 
 	switch section.identifier {
@@ -324,7 +340,7 @@ func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error
 		}
 
 	case "CODE":
-		err = readCodeSection(file, writer)
+		err = readCodeSection(file)
 	}
 
 	return err
@@ -351,7 +367,7 @@ func readFunctionImportSection(file *os.File, funcName string) error {
 	return nil
 }
 
-func readCodeSection(file *os.File, writer CodeWriter) error {
+func readCodeSection(file *os.File) error {
 
 	buffer := make([]byte, 4)
 	n, err := file.Read(buffer)
@@ -404,7 +420,7 @@ func readCodeSection(file *os.File, writer CodeWriter) error {
 
 		if declaration != nil {
 			var def *FunctionDefinition
-			idx, def = DecompileFunction(declaration, idx, initialOffset, writer)
+			idx, def = DecompileFunction(declaration, idx, initialOffset)
 			DECOMPILED_FUNCS = append(DECOMPILED_FUNCS, def)
 		}
 	}
@@ -418,21 +434,18 @@ func resolveAllTypes() {
 		resolveCount := 0
 
 		// First reset all the possible types
-		for ii := range DECOMPILED_FUNCS {
-			DECOMPILED_FUNCS[ii].ResetPossibleTypes()
+		for _, fnc := range DECOMPILED_FUNCS {
+			fnc.ResetPossibleTypes()
 		}
 
 		// Call the type resolution done on the statements
-		for ii := range DECOMPILED_FUNCS {
-			DECOMPILED_FUNCS[ii].ResolveBodyTypes()
+		for _, fnc := range DECOMPILED_FUNCS {
+			resolveCount += fnc.ResolveBodyTypes()
 		}
 
-		for ii := range DECOMPILED_FUNCS {
-			fnc := DECOMPILED_FUNCS[ii]
-			if fnc.declaration.parameters == nil {
-				continue
-			}
-			resolveCount += fnc.ResolveHeaderTypes()
+		// Call the type resolution done on the function parameters and return types
+		for _, fnc := range DECOMPILED_FUNCS {
+			resolveCount += fnc.ResolveDeclarationTypes()
 		}
 		if resolveCount == 0 {
 			break
@@ -442,15 +455,29 @@ func resolveAllTypes() {
 
 func checkAllCode() {
 	// Check the code of each function
-	for ii := range DECOMPILED_FUNCS {
-		DECOMPILED_FUNCS[ii].CheckCode()
+	for _, fnc := range DECOMPILED_FUNCS {
+		fnc.CheckCode()
 	}
+}
+
+func createWriter() (CodeWriter, error) {
+	fmt.Printf("Writing pog: %s\n", OUTPUT_FILE)
+
+	outputFile, err := os.OpenFile(OUTPUT_FILE, os.O_WRONLY|os.O_CREATE|os.O_SYNC|os.O_TRUNC, 0644)
+
+	if err != nil {
+		return nil, err
+	}
+	return NewCodeWriter(outputFile), nil
 }
 
 func main() {
 	flag.StringVar(&INCLUDES_DIR, "includes", "", "The includes directory with package headers.")
 	flag.StringVar(&OUTPUT_FILE, "output", "", "The file path to which the pog file will be written.")
 	flag.BoolVar(&OUTPUT_ASSEMBLY, "assembly", false, "Have the decompiler output the 'assembly' for each function as comments above the function.")
+	flag.BoolVar(&ASSEMBLY_ONLY, "assembly-only", false, "Have the decompiler output only the assembly for the package.")
+	flag.BoolVar(&ASSEMBLY_OFFSET_PREFIX, "assembly-offset-prefix", true, "Prefix each line of assembly with its binary address.")
+	flag.BoolVar(&DEBUG_LOGGING, "debug", false, "Output code that logs debug info at the start of every function.")
 	flag.Parse()
 
 	// TODO: Proper arguments later when we need some
@@ -495,25 +522,35 @@ func main() {
 	f.Seek(4, 1)
 	form.length -= 4
 
-	fmt.Printf("Writing pog: %s\n", OUTPUT_FILE)
-
-	outputFile, err := os.OpenFile(OUTPUT_FILE, os.O_RDWR|os.O_CREATE, 0644)
-
-	if err != nil {
-		fmt.Printf("Error: Failed to write file: %v\n", err)
-		return
-	}
-	writer := NewCodeWriter(outputFile)
-	defer outputFile.Close()
-
-	err = readSections(f, form.length, writer)
+	err = readSections(f, form.length)
 
 	if err != nil {
 		fmt.Printf("Error: Failed to read file: %v", err)
 		return
 	}
 
-	ResolveUndefinedFunctionElements()
+	// See if we should just output assembly
+	if ASSEMBLY_ONLY {
+
+		writer, err := createWriter()
+		if err != nil {
+			fmt.Printf("Error: Failed to write file: %v\n", err)
+			return
+		}
+
+		OUTPUT_ASSEMBLY = true
+		for idx := 0; idx < len(OPERATIONS); idx++ {
+			operation := OPERATIONS[idx]
+			if ASSEMBLY_OFFSET_PREFIX {
+				writer.Appendf("// 0x%08X ", operation.offset)
+			} else {
+				writer.Append("// ")
+			}
+			operation.WriteAssembly(writer)
+			writer.Append("\n")
+		}
+		return
+	}
 
 	// Resolve types until no more are resolved
 	resolveAllTypes()
@@ -526,8 +563,10 @@ func main() {
 				param := &params[ii]
 				if param.typeName == UNKNOWN_TYPE {
 					param.typeName = "int"
-					param.potentialTypes["int"] = true
-					fmt.Printf("WARN: Failed to resolve the type for parameter %s of function %s, defaulting to int.\n", param.parameterName, fnc.declaration.GetScopedName())
+					param.variable.AddReferencedType("int")
+					if param.variable.refCount > 0 {
+						fmt.Printf("WARN: Failed to resolve the type for parameter %s of function %s, defaulting to int.\n", param.parameterName, fnc.declaration.GetScopedName())
+					}
 				}
 			}
 			// Lock in our header types
@@ -536,7 +575,6 @@ func main() {
 	}
 
 	// Resolve types one more time now that we have our functions better defined
-	resolveAllTypes()
 	resolveAllTypes()
 
 	// Fix functions with unknown return types
@@ -547,6 +585,13 @@ func main() {
 	// We need to detect the dependencies so we can reorder imports accordingly
 	DetectPackageDependencies()
 
+	writer, err := createWriter()
+	if err != nil {
+		fmt.Printf("Error: Failed to write file: %v\n", err)
+		return
+	}
+
+	// Start writing the file
 	writer.Appendf("package %s;\n\n", EXPORTING_PACKAGE)
 	renderPackageImports(writer)
 	renderFunctionExports(writer)

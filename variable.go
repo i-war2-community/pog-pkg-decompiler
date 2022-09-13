@@ -19,10 +19,6 @@ var HANDLE_MAP map[string]HandleTypeInfo = map[string]HandleTypeInfo{
 		baseType:      "",
 		sourcePackage: SYSTEM_PACKAGE,
 	},
-	"list": {
-		baseType:      "",
-		sourcePackage: "List",
-	},
 }
 
 func IsHandleType(typeName string) bool {
@@ -30,10 +26,21 @@ func IsHandleType(typeName string) bool {
 	return ok
 }
 
+var COLLECTION_MAP = map[string]bool{
+	"set":  true,
+	"list": true,
+}
+
+func IsCollectionType(typeName string) bool {
+	_, ok := COLLECTION_MAP[typeName]
+	return ok
+}
+
 type Variable struct {
 	typeName        string
 	variableName    string
 	stackIndex      uint32
+	hasInit         bool
 	assignedTypes   map[string]bool
 	referencedTypes map[string]bool
 	refCount        int
@@ -56,20 +63,6 @@ func (v *Variable) ResetPossibleTypes() {
 	v.refCount = 0
 }
 
-func (v *Variable) GetPossibleTypes() map[string]bool {
-	result := map[string]bool{}
-
-	for k, v := range v.assignedTypes {
-		result[k] = v
-	}
-
-	for k, v := range v.referencedTypes {
-		result[k] = v
-	}
-
-	return result
-}
-
 func (v *Variable) GetAssignedTypes() []string {
 	result := []string{}
 
@@ -88,6 +81,154 @@ func (v *Variable) GetReferencedTypes() []string {
 	}
 
 	return result
+}
+
+func getHandleTypes(types []string) []string {
+	result := []string{}
+	for _, t := range types {
+		if IsHandleType(t) {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+func getEnumType(types []string) string {
+	enumTypeCount := 0
+	var enumType string
+
+	for _, typeName := range types {
+		if IsEnumType(typeName) {
+			enumTypeCount++
+			enumType = typeName
+		}
+	}
+
+	if enumTypeCount == 1 {
+		return enumType
+	}
+
+	return UNKNOWN_TYPE
+}
+
+func getCollectionType(types []string) string {
+	collectionTypeCount := 0
+	var collectionType string
+
+	for _, typeName := range types {
+		if IsCollectionType(typeName) {
+			collectionTypeCount++
+			collectionType = typeName
+		}
+	}
+
+	if collectionTypeCount == 1 {
+		return collectionType
+	}
+
+	return UNKNOWN_TYPE
+}
+
+func getBestNonHandleType(types []string) string {
+	hasBool := false
+	hasInt := false
+	hasFloat := false
+	hasString := false
+
+	// Check to see if we are an enum
+	enumType := getEnumType(types)
+	if enumType != UNKNOWN_TYPE {
+		return enumType
+	}
+
+	// Check to see if we are a collection
+	collectionType := getCollectionType(types)
+	if collectionType != UNKNOWN_TYPE {
+		return collectionType
+	}
+
+	for _, t := range types {
+		hasBool = (t == "bool")
+		hasInt = (t == "int")
+		hasFloat = (t == "float")
+		hasString = (t == "string")
+	}
+
+	if hasString {
+		return "string"
+	}
+	if hasFloat {
+		return "float"
+	}
+	if hasInt {
+		return "int"
+	}
+	if hasBool {
+		return "bool"
+	}
+
+	return UNKNOWN_TYPE
+}
+
+func getTypeFromAssignedTypes(assigned []string) string {
+	handleTypes := getHandleTypes(assigned)
+
+	if len(handleTypes) > 0 {
+		return "hobject"
+	}
+
+	return getBestNonHandleType(assigned)
+}
+
+func getTypeFromReferencedTypes(referenced []string) string {
+	handleTypes := getHandleTypes(referenced)
+
+	if len(handleTypes) > 0 {
+		// Find the highest referenced type
+		highestType := UNKNOWN_TYPE
+		for _, handle := range handleTypes {
+
+			if highestType == UNKNOWN_TYPE {
+				highestType = handle
+			}
+
+			if HandleIsDerivedFrom(highestType, handle) {
+				continue
+			}
+			if HandleIsDerivedFrom(handle, highestType) {
+				highestType = handle
+				continue
+			}
+			highestType = UNKNOWN_TYPE
+			break
+		}
+		return highestType
+	}
+	return getBestNonHandleType(referenced)
+}
+
+func (v *Variable) ResolveType() bool {
+	// if v.typeName != UNKNOWN_TYPE {
+	// 	return false
+	// }
+	detectedType := UNKNOWN_TYPE
+	assigned := v.GetAssignedTypes()
+	referenced := v.GetReferencedTypes()
+
+	// If we have no referenced types, we must be what was assigned to us
+	if len(referenced) == 0 {
+		detectedType = getTypeFromAssignedTypes(assigned)
+	} else {
+		detectedType = getTypeFromReferencedTypes(referenced)
+	}
+
+	if detectedType != UNKNOWN_TYPE && v.typeName != detectedType {
+		//fmt.Printf("%d changed from %s to %s\n", v.id, v.typeName, detectedType)
+		v.typeName = detectedType
+		return true
+	}
+
+	return false
 }
 
 type EnumTypeInfo struct {
