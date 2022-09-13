@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -82,6 +83,9 @@ func renderPackageImports(writer CodeWriter) {
 		}
 	}
 
+	// Sort the initial set of imports so the output will be deterministic (maps won't iterate in the same order each time)
+	sort.Strings(imports)
+
 	// Now check for any missing dependencies
 	for ii := 0; ii < len(imports); ii++ {
 		pkgName := imports[ii]
@@ -138,12 +142,18 @@ func renderEnums(writer CodeWriter) {
 			writer.Appendf("enum %s\n", enumName)
 			writer.Append("{\n")
 			writer.PushIndent()
-			keys := []string{}
-			for k := range ENUM_MAP[enumName].nameToValue {
+			keys := []uint32{}
+			for k := range ENUM_MAP[enumName].valueToName {
 				keys = append(keys, k)
 			}
+
+			// Sort the array
+			sort.Slice(keys, func(i, j int) bool {
+				return keys[i] < keys[j]
+			})
+
 			for ii, k := range keys {
-				writer.Appendf("%s = 0x%08X", k, ENUM_MAP[enumName].nameToValue[k])
+				writer.Appendf("%s = 0x%08X", ENUM_MAP[enumName].valueToName[k], k)
 				if ii < len(keys)-1 {
 					writer.Append(",\n")
 				} else {

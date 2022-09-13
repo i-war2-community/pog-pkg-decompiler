@@ -222,7 +222,7 @@ func (v *Variable) ResolveType() bool {
 		detectedType = getTypeFromReferencedTypes(referenced)
 	}
 
-	if v.typeName != detectedType {
+	if detectedType != UNKNOWN_TYPE && v.typeName != detectedType {
 		//fmt.Printf("%d changed from %s to %s\n", v.id, v.typeName, detectedType)
 		v.typeName = detectedType
 		return true

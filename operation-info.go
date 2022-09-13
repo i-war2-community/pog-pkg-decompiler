@@ -103,8 +103,7 @@ const (
 
 	OP_JUMP_IF_NOT_DEBUG byte = 0x45
 
-	OP_CAST_HANDLE_TO_HANDLE byte = 0xF1
-	OP_REMOVED               byte = 0xFF
+	OP_REMOVED byte = 0xFF
 )
 
 var OP_MAP = map[byte]OperationInfo{
@@ -189,8 +188,7 @@ var OP_MAP = map[byte]OperationInfo{
 
 	OP_JUMP_IF_NOT_DEBUG: {name: "OP_JUMP_IF_NOT_DEBUG", dataSize: 4, parser: ParseJump},
 
-	OP_CAST_HANDLE_TO_HANDLE: {name: "OP_CAST_HANDLE_TO_HANDLE", dataSize: 0, omit: true},
-	OP_REMOVED:               {name: "OP_REMOVED", dataSize: 0, omit: true},
+	OP_REMOVED: {name: "OP_REMOVED", dataSize: 0, omit: true},
 }
 
 type PopStackData struct {

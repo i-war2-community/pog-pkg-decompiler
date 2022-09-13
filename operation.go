@@ -27,10 +27,7 @@ func IsFunctionCall(operation *Operation) bool {
 	switch operation.opcode {
 	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_IMPORTED, OP_TASK_CALL_LOCAL:
 		return true
-	case OP_CAST_HANDLE_TO_HANDLE:
-		return true
 	}
-
 	return false
 }
 
@@ -50,6 +47,24 @@ func GetLiteralIntegerValue(operation *Operation) int32 {
 	}
 	fmt.Printf("ERROR: Trying to get integer value for non-integer type")
 	return -1
+}
+
+func RenderFloat(flt float32) string {
+	result := fmt.Sprintf("%f", flt)
+	// Truncate all the extra zeros off the end
+	if len(result) > 3 {
+		trailingZeroCount := 0
+		for idx := len(result) - 1; idx > 0; idx-- {
+			if result[idx] != '0' {
+				break
+			}
+			trailingZeroCount++
+		}
+		if trailingZeroCount > 1 {
+			result = result[:len(result)-(trailingZeroCount-1)]
+		}
+	}
+	return result
 }
 
 func RenderOperationCode(operation *Operation, scope *Scope) *string {
@@ -89,7 +104,7 @@ func RenderOperationCode(operation *Operation, scope *Scope) *string {
 
 	case OP_LITERAL_FLT:
 		data := operation.data.(LiteralFloatData)
-		result = fmt.Sprintf("%f", data.value)
+		result = RenderFloat(data.value)
 
 	case OP_LITERAL_STRING:
 		data := operation.data.(LiteralStringData)

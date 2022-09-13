@@ -498,94 +498,100 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 			cw := NewCodeWriter(os.Stdout)
 			cw.Appendf("ERROR: Mismatched handle types in equivalence check. This will cause both handles to be cast to bools and then compared:\n")
 			cw.PushIndent()
-			printGraphNode(og, cw, false)
+			og.Render(cw, false)
 			cw.Append("\n")
 			cw.Appendf("L Type: %s\n", child1.typeName)
 			cw.Appendf("R Type: %s\n", child2.typeName)
 			cw.PopIndent()
 			cw.Append("\n")
-
-			// childIdx := -1
-			// targetType := ""
-
-			// if HandleIsDerivedFrom(child1.typeName, child2.typeName) {
-			// 	childIdx = 0
-			// 	targetType = child2.typeName
-
-			// } else if HandleIsDerivedFrom(child2.typeName, child1.typeName) {
-			// 	childIdx = 1
-			// 	targetType = child1.typeName
-			// } else {
-			// 	fmt.Printf("ERROR: Failed to insert cast to fix mismatched handle type comparison.\n")
-			// 	return
-			// }
-
-			// // Get the appropriate function to make the cast
-			// castFunction := GetCastFunctionForHandleType(targetType)
-
-			// // HACK: Insert an operation to perform the cast once we render the code
-			// castOp := &OpGraph{
-			// 	operation: &Operation{
-			// 		opcode: OP_CAST_HANDLE_TO_HANDLE,
-			// 	},
-			// 	children: []*OpGraph{
-			// 		og.children[childIdx],
-			// 	},
-			// 	code: &castFunction,
-			// }
-			// og.children[childIdx] = castOp
 		}
 	}
 }
 
-func printGraphNode(node *OpGraph, writer CodeWriter, onlyChild bool) {
-
-	if len(node.children) == 2 && !IsFunctionCall(node.operation) {
-		if !onlyChild || node.operation.opcode == OP_STRING_EQUALS {
-			writer.Append("(")
-		}
-		printGraphNode(node.children[0], writer, false)
-		writer.Append(" ")
+func (node *OpGraph) ShouldRenderBeforeChidlren() bool {
+	if IsFunctionCall(node.operation) {
+		return true
 	}
 
-	// Write ourselves
+	return len(node.children) != 2
+}
+
+func (node *OpGraph) ShouldUseParentheses(onlyChild bool) bool {
+	if IsFunctionCall(node.operation) {
+		return true
+	}
+
+	popCount := 0
+	if node.operation.data != nil {
+		popCount = node.operation.data.PopCount()
+	}
+
+	// For unary operators that are being applied to some math or logical operator
+	if node.code != nil && len(*node.code) > 0 && popCount == 1 && len(node.children[0].children) > 1 && !node.children[0].ShouldRenderBeforeChidlren() {
+		return true
+	}
+
+	return !onlyChild && popCount > 1
+}
+
+func (node *OpGraph) renderSelf(writer CodeWriter) {
 	if node.code != nil {
 		writer.Append(*node.code)
 	} else {
+		// If we hit this, the opcode hasn't been properly set up so we will just print out something that fails to compile
 		opInfo := OP_MAP[node.operation.opcode]
 		writer.Appendf("%s", opInfo.name)
 		if node.operation.data != nil && len(node.operation.data.String()) > 0 {
 			writer.Appendf("[%s]", node.operation.data.String())
 		}
 	}
+}
 
-	if len(node.children) == 1 && !IsFunctionCall(node.operation) {
-		printGraphNode(node.children[0], writer, true)
-	}
+func (node *OpGraph) Render(writer CodeWriter, onlyChild bool) {
 
-	if len(node.children) == 2 && !IsFunctionCall(node.operation) {
+	if !node.ShouldRenderBeforeChidlren() {
+		if node.ShouldUseParentheses(onlyChild) {
+			writer.Append("(")
+		}
+
+		node.children[0].Render(writer, false)
+
 		writer.Append(" ")
-		printGraphNode(node.children[1], writer, false)
-		if !onlyChild || node.operation.opcode == OP_STRING_EQUALS {
+		node.renderSelf(writer)
+		writer.Append(" ")
+
+		node.children[1].Render(writer, false)
+
+		if node.ShouldUseParentheses(onlyChild) {
 			writer.Append(")")
 		}
-	}
+	} else {
+		// Render ourselves
+		node.renderSelf(writer)
 
-	if IsFunctionCall(node.operation) {
-		writer.Append("(")
-		if len(node.children) > 0 {
-			writer.Append(" ")
+		// Render our open parenthesis
+		if node.ShouldUseParentheses(onlyChild) {
+			writer.Append("(")
+			if len(node.children) > 0 {
+				writer.Append(" ")
+			}
 		}
+
+		// Render our children
 		for ii := len(node.children) - 1; ii >= 0; ii-- {
-			printGraphNode(node.children[ii], writer, true)
+			node.children[ii].Render(writer, true)
 			if ii > 0 {
 				writer.Append(", ")
 			}
 		}
-		if len(node.children) > 0 {
-			writer.Append(" ")
+
+		// Render our closed parenthesis
+		if node.ShouldUseParentheses(onlyChild) {
+			if len(node.children) > 0 {
+				writer.Append(" ")
+			}
+			writer.Append(")")
 		}
-		writer.Append(")")
 	}
 }
 
@@ -594,7 +600,7 @@ type Statement struct {
 }
 
 func (s *Statement) Render(writer CodeWriter) {
-	printGraphNode(s.graph, writer, true)
+	s.graph.Render(writer, true)
 }
 
 func (s *Statement) RenderAssemblyOffsets(writer CodeWriter) {
@@ -880,7 +886,7 @@ type ScheduleEveryBlock struct {
 func (eb *ScheduleEveryBlock) Render(writer CodeWriter) {
 
 	// Write out the top of the block
-	writer.Appendf("every %f:\n", eb.interval)
+	writer.Appendf("every %s:\n", RenderFloat(eb.interval))
 	writer.Append("{\n")
 	writer.PushIndent()
 
@@ -1007,6 +1013,42 @@ type ForLoop struct {
 	body        []BlockElement
 }
 
+func (fl *ForLoop) renderIncrement(writer CodeWriter) {
+	// Since they don't have an opcode for ++, try to detect it here at least
+	assignment := fl.increment.graph.children[0]
+	incrementVariable := ""
+	decrementVariable := ""
+
+	if assignment.operation.opcode == OP_VARIABLE_WRITE {
+		varWriteData := assignment.operation.data.(VariableWriteData)
+		if assignment.children[0].operation.opcode == OP_INT_ADD {
+			add := assignment.children[0]
+			if add.children[0].operation.opcode == OP_VARIABLE_READ {
+				varReadData := add.children[0].operation.data.(VariableReadData)
+				if varReadData.index == varWriteData.index {
+					if IsLiteralInteger(add.children[1].operation) {
+						value := GetLiteralIntegerValue(add.children[1].operation)
+						switch value {
+						case 1:
+							incrementVariable = *add.children[0].code
+						case -1:
+							decrementVariable = *add.children[0].code
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(incrementVariable) > 0 {
+		writer.Appendf("++%s", incrementVariable)
+	} else if len(decrementVariable) > 0 {
+		writer.Appendf("--%s", decrementVariable)
+	} else {
+		fl.increment.Render(writer)
+	}
+}
+
 func (fl *ForLoop) Render(writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("for ( ")
@@ -1014,7 +1056,7 @@ func (fl *ForLoop) Render(writer CodeWriter) {
 	writer.Append("; ")
 	fl.conditional.Render(writer)
 	writer.Append("; ")
-	fl.increment.Render(writer)
+	fl.renderIncrement(writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
 		fl.init.RenderAssemblyOffsets(writer)
