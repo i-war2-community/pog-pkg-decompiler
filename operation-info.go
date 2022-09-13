@@ -581,7 +581,6 @@ func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
 				p := &params[ii]
 				p.typeName = UNKNOWN_TYPE
 				p.parameterName = fmt.Sprintf("param_%d", ii)
-				p.potentialTypes = map[string]bool{}
 			}
 			declaration.parameters = &params
 		}
@@ -592,7 +591,6 @@ func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
 				p := &params[ii]
 				p.typeName = UNKNOWN_TYPE
 				p.parameterName = fmt.Sprintf("param_%d", ii)
-				p.potentialTypes = map[string]bool{}
 			}
 			declaration.parameters = &params
 		}
@@ -612,30 +610,17 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 	if !ok {
 		declaration = AddFunctionDeclaration("", fmt.Sprintf("local_function_%08X", offset))
 		FUNC_DEFINITION_MAP[offset] = declaration
+	}
 
-		if declaration.parameters == nil {
-			declaration.returnTypeName = "task"
-			params := make([]FunctionParameter, parameterCount)
-			for ii := 0; ii < len(params); ii++ {
-				p := &params[ii]
-				p.typeName = UNKNOWN_TYPE
-				p.parameterName = fmt.Sprintf("param_%d", ii)
-				p.potentialTypes = map[string]bool{}
-			}
-			declaration.parameters = &params
+	if declaration.parameters == nil {
+		declaration.returnInfo.typeName = "task"
+		params := make([]FunctionParameter, parameterCount)
+		for ii := 0; ii < len(params); ii++ {
+			p := &params[ii]
+			p.typeName = UNKNOWN_TYPE
+			p.parameterName = fmt.Sprintf("param_%d", ii)
 		}
-	} else {
-		if declaration.parameters == nil {
-			params := make([]FunctionParameter, parameterCount)
-			for ii := 0; ii < len(params); ii++ {
-				p := &params[ii]
-				p.typeName = UNKNOWN_TYPE
-				p.parameterName = fmt.Sprintf("param_%d", ii)
-				p.potentialTypes = map[string]bool{}
-			}
-			declaration.parameters = &params
-		}
-		declaration.returnTypeName = "task"
+		declaration.parameters = &params
 	}
 
 	return FunctionCallData{
@@ -654,7 +639,6 @@ func ParseFunctionCallImported(data []byte, codeOffset uint32) OperationData {
 			p := &params[ii]
 			p.typeName = UNKNOWN_TYPE
 			p.parameterName = fmt.Sprintf("param_%d", ii)
-			p.potentialTypes = map[string]bool{}
 		}
 		declaration.parameters = &params
 	}

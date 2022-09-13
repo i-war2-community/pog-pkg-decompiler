@@ -9,29 +9,28 @@ import (
 const PROTOTYPE_PREFIX = "prototype"
 
 type FunctionParameter struct {
-	typeName       string
-	parameterName  string
-	potentialTypes map[string]bool
-	id             int
+	typeName      string
+	parameterName string
+	variable      *Variable
 }
 
 type FunctionDeclaration struct {
-	pkg                 string
-	name                string
-	returnTypeName      string
-	parameters          *[]FunctionParameter
-	possibleReturnTypes map[string]bool
-	autoDetectTypes     bool
+	pkg             string
+	name            string
+	parameters      *[]FunctionParameter
+	autoDetectTypes bool
+	returnInfo      *Variable
 }
 
 func (fd *FunctionDeclaration) ResetPossibleTypes() {
-	fd.possibleReturnTypes = map[string]bool{}
-	if fd.parameters != nil {
-		params := *fd.parameters
-		for ii := range params {
-			params[ii].potentialTypes = map[string]bool{}
-		}
+	fd.returnInfo.ResetPossibleTypes()
+}
+
+func (fd *FunctionDeclaration) GetReturnType() string {
+	if fd.returnInfo.typeName == "task" {
+		return "htask"
 	}
+	return fd.returnInfo.typeName
 }
 
 var FUNC_DECLARATIONS map[string]*FunctionDeclaration = map[string]*FunctionDeclaration{}
@@ -46,107 +45,6 @@ type FunctionDefinition struct {
 	initialOffset int64
 }
 
-func findBaseTypeForAssignedTypes(assignedTypes []string) string {
-	baseType := UNKNOWN_TYPE
-	if len(assignedTypes) > 0 {
-		for idx := 0; idx < len(assignedTypes); idx++ {
-			assigned := assignedTypes[idx]
-
-			if !IsHandleType(assigned) {
-				continue
-			}
-
-			baseType = "hobject"
-			break
-
-			// 	if baseType == UNKNOWN_TYPE {
-			// 		baseType = assigned
-			// 		continue
-			// 	}
-
-			// 	if HandleIsDerivedFrom(assigned, baseType) {
-			// 		continue
-			// 	}
-			// 	if HandleIsDerivedFrom(baseType, assigned) {
-			// 		baseType = assigned
-			// 		continue
-			// 	}
-			// 	common := UNKNOWN_TYPE
-			// 	for typeA := baseType; len(typeA) > 0; typeA = HANDLE_MAP[typeA].baseType {
-			// 		for typeB := assigned; len(typeB) > 0; typeB = HANDLE_MAP[typeB].baseType {
-			// 			if typeA == typeB {
-			// 				common = typeA
-			// 				break
-			// 			}
-			// 		}
-			// 		if common != UNKNOWN_TYPE {
-			// 			break
-			// 		}
-			// 	}
-			// 	if common != UNKNOWN_TYPE {
-			// 		baseType = common
-			// 		continue
-			// 	}
-			// 	break
-		}
-		// return baseType
-	}
-
-	return baseType
-}
-
-func findBaseTypeForReferencedTypes(referencedTypes []string, startingType string) string {
-	if len(referencedTypes) > 0 {
-		baseType := startingType
-
-		for idx := 0; idx < len(referencedTypes); idx++ {
-			referenced := referencedTypes[idx]
-
-			if !IsHandleType(referenced) {
-				continue
-			}
-
-			if baseType == UNKNOWN_TYPE {
-				baseType = "hobject"
-			}
-
-			if HandleIsDerivedFrom(baseType, referenced) {
-				continue
-			}
-			if HandleIsDerivedFrom(referenced, baseType) {
-				baseType = referenced
-				continue
-			}
-			baseType = UNKNOWN_TYPE
-			break
-		}
-		return baseType
-	}
-
-	return startingType
-}
-
-func pickBestNonHandleType(possibleTypes map[string]bool) string {
-	_, okInt := possibleTypes["int"]
-	_, okFloat := possibleTypes["float"]
-	_, okBool := possibleTypes["bool"]
-	if okInt && okBool {
-		return "int"
-	}
-	if okInt && okFloat {
-		return "float"
-	}
-	if okBool && okFloat {
-		return "float"
-	}
-	// TODO: Maybe remove this when we add enum support
-	if okInt {
-		return "int"
-	}
-
-	return UNKNOWN_TYPE
-}
-
 func (fd *FunctionDefinition) ResetPossibleTypes() {
 	fd.declaration.ResetPossibleTypes()
 	for _, v := range fd.scope.variables {
@@ -154,166 +52,51 @@ func (fd *FunctionDefinition) ResetPossibleTypes() {
 	}
 }
 
-func (fd *FunctionDefinition) ResolveBodyTypes() {
-	// Resolve variable types
-	ResolveTypes(fd.scope, fd.body)
-}
-
 func (fd *FunctionDefinition) CheckCode() {
-	// Resolve variable types
-	//CheckCode(fd.scope, fd.body)
+	CheckCode(fd.scope, fd.body)
 }
 
-func getEnumType(possibleTypes map[string]bool) string {
-	// Check for enum type
-	enumTypeCount := 0
-	var enumType string
-
-	for typeName, _ := range possibleTypes {
-		if IsEnumType(typeName) {
-			enumTypeCount++
-			enumType = typeName
-		}
-	}
-
-	if enumTypeCount == 1 {
-		return enumType
-	}
-
-	return UNKNOWN_TYPE
-}
-
-func (fd *FunctionDefinition) ResolveHeaderTypes() int {
+func (fd *FunctionDefinition) ResolveBodyTypes() int {
 	resolvedCount := 0
 
-	for idx := range fd.scope.variables {
+	// Resolve potential types
+	ResolveTypes(fd.scope, fd.body)
+
+	// Resolve only the local variables, not the parameters
+	for idx := fd.scope.localVariableIndexOffset; idx < uint32(len(fd.scope.variables)); idx++ {
 		v := fd.scope.variables[idx]
-		possibleTypes := v.GetPossibleTypes()
-
-		if idx < int(fd.scope.localVariableIndexOffset) {
-
-			// If we had a proper function declaration, we shouldn't change our types
-			if !fd.declaration.autoDetectTypes {
-				continue
-			}
-
-			for key := range (*fd.declaration.parameters)[idx].potentialTypes {
-				possibleTypes[key] = true
-			}
-		}
-
-		if len(possibleTypes) == 1 {
-			for key := range possibleTypes {
-				if v.typeName != key {
-					v.typeName = key
-					resolvedCount++
-				}
-				break
-			}
-		} else if len(possibleTypes) > 1 {
-
-			// Find the most basic type of all those assigned
-			assignedTypes := v.GetAssignedTypes()
-			referencedTypes := v.GetReferencedTypes()
-
-			// If this is a function parameter, add the types that were assigned to it
-			if idx < int(fd.scope.localVariableIndexOffset) {
-				//assignedTypes = []string{}
-				for key := range (*fd.declaration.parameters)[idx].potentialTypes {
-					assignedTypes = append(assignedTypes, key)
-				}
-			}
-
-			baseType := findBaseTypeForAssignedTypes(assignedTypes)
-			baseType = findBaseTypeForReferencedTypes(referencedTypes, baseType)
-
-			if baseType != UNKNOWN_TYPE {
-				if v.typeName != baseType {
-					v.typeName = baseType
-					resolvedCount++
-				}
-			} else {
-
-				// Check for enum type
-				enumType := getEnumType(possibleTypes)
-				if enumType != UNKNOWN_TYPE {
-					if v.typeName != enumType {
-						v.typeName = enumType
-						resolvedCount++
-					}
-					continue
-				}
-
-				if len(assignedTypes) == 1 {
-					if v.typeName != assignedTypes[0] {
-						v.typeName = assignedTypes[0]
-						resolvedCount++
-					}
-					continue
-				}
-				// Find the best possible non-handle type
-				bestType := pickBestNonHandleType(possibleTypes)
-				if v.typeName != bestType {
-					v.typeName = bestType
-					resolvedCount++
-				}
-			}
+		if v.ResolveType() {
+			resolvedCount++
 		}
 	}
 
-	// Copy over parameter types from their respective scope variable to the function declaration
-	for idx := 0; idx < int(fd.scope.localVariableIndexOffset); idx++ {
-		v := fd.scope.variables[idx]
-		param := &(*fd.declaration.parameters)[idx]
-		if v.typeName != UNKNOWN_TYPE {
-			param.typeName = v.typeName
-		}
-	}
+	return resolvedCount
+}
 
+func (fd *FunctionDefinition) ResolveDeclarationTypes() int {
+	resolvedCount := 0
+
+	// If the function declaration came from an include, we don't want to resolve types
 	if fd.declaration.autoDetectTypes {
+
+		// Resolve our parameter types
+		for idx := 0; idx < int(fd.scope.localVariableIndexOffset); idx++ {
+			v := fd.scope.variables[idx]
+
+			if v.ResolveType() {
+				resolvedCount++
+			}
+
+			// Copy the type over to the parameter
+			param := &(*fd.declaration.parameters)[idx]
+			if v.typeName != UNKNOWN_TYPE {
+				param.typeName = v.typeName
+			}
+		}
+
 		// See if we can resolve the return type
-		if len(fd.declaration.possibleReturnTypes) == 1 {
-			for key := range fd.declaration.possibleReturnTypes {
-				if fd.declaration.returnTypeName != key {
-					fd.declaration.returnTypeName = key
-					resolvedCount++
-				}
-				break
-			}
-		} else if len(fd.declaration.possibleReturnTypes) > 1 {
-
-			possibleTypes := fd.declaration.possibleReturnTypes
-
-			// Check if they are handle types
-			types := []string{}
-			for possible := range possibleTypes {
-				types = append(types, possible)
-			}
-
-			// Check for enum type
-			enumType := getEnumType(possibleTypes)
-			if enumType != UNKNOWN_TYPE {
-				if fd.declaration.returnTypeName != enumType {
-					fd.declaration.returnTypeName = enumType
-					resolvedCount++
-				}
-			} else {
-
-				baseType := findBaseTypeForAssignedTypes(types)
-
-				if baseType != UNKNOWN_TYPE {
-					if fd.declaration.returnTypeName != baseType {
-						fd.declaration.returnTypeName = baseType
-						resolvedCount++
-					}
-				} else {
-					bestType := pickBestNonHandleType(possibleTypes)
-					if fd.declaration.returnTypeName != bestType {
-						fd.declaration.returnTypeName = bestType
-						resolvedCount++
-					}
-				}
-			}
+		if fd.declaration.returnInfo.ResolveType() {
+			resolvedCount++
 		}
 	}
 
@@ -390,8 +173,10 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, fd.declaration, writer)
 
-	//writer.Appendf(`debug atomic Debug.PrintString("Inside function: %s %s\n");`, EXPORTING_PACKAGE, renderFunctionDefinitionHeader(fd.declaration))
-	//writer.Append("\n")
+	if DEBUG_LOGGING {
+		writer.Appendf(`debug atomic Debug.PrintString("Inside function: %s %s\n");`, EXPORTING_PACKAGE, renderFunctionDefinitionHeader(fd.declaration))
+		writer.Append("\n")
+	}
 
 	RenderBlockElements(fd.body, writer)
 
@@ -403,7 +188,12 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 	result := new(FunctionDeclaration)
 	result.pkg = pkg
 	result.name = name
-	result.possibleReturnTypes = map[string]bool{}
+	result.returnInfo = &Variable{
+		stackIndex:      0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
+		assignedTypes:   map[string]bool{},
+		referencedTypes: map[string]bool{},
+		typeName:        UNKNOWN_TYPE,
+	}
 	result.autoDetectTypes = true
 
 	// Check to see if we have this one already
@@ -411,14 +201,18 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 		return existing
 	}
 
-	result.returnTypeName = UNKNOWN_TYPE
-
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
 }
 
 func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration {
 	result := new(FunctionDeclaration)
+	result.returnInfo = &Variable{
+		stackIndex:      0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
+		assignedTypes:   map[string]bool{},
+		referencedTypes: map[string]bool{},
+		typeName:        UNKNOWN_TYPE,
+	}
 	result.autoDetectTypes = false
 
 	if !strings.HasPrefix(prototype, PROTOTYPE_PREFIX) {
@@ -450,9 +244,9 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 
 	switch len(parts) {
 	case 1:
-		result.returnTypeName = ""
+		result.returnInfo.typeName = ""
 	case 2:
-		result.returnTypeName = parts[0]
+		result.returnInfo.typeName = parts[0]
 		function = parts[1]
 	default:
 		fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
@@ -486,9 +280,8 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 				return nil
 			}
 			p := FunctionParameter{
-				typeName:       parts[0],
-				parameterName:  parts[1],
-				potentialTypes: map[string]bool{},
+				typeName:      parts[0],
+				parameterName: parts[1],
 			}
 			parameters = append(parameters, p)
 		}
@@ -498,12 +291,6 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 		result.parameters = &[]FunctionParameter{}
 	}
 
-	if result.returnTypeName == "task" {
-		result.returnTypeName = "task"
-	}
-
-	result.possibleReturnTypes = map[string]bool{}
-
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
 }
@@ -512,8 +299,8 @@ func SetAllUnknownFunctionReturnTypesToVoid() {
 	for idx := range FUNC_DECLARATIONS {
 		f := FUNC_DECLARATIONS[idx]
 
-		if f.returnTypeName == UNKNOWN_TYPE {
-			f.returnTypeName = ""
+		if f.returnInfo.typeName == UNKNOWN_TYPE {
+			f.returnInfo.typeName = ""
 		}
 	}
 }
@@ -565,11 +352,11 @@ func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint3
 
 func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 	var sb strings.Builder
-
-	if len(declaration.returnTypeName) > 0 {
-		returnType := declaration.returnTypeName
+	// Use the actual set return type here to deal with the task/htask thing
+	returnType := declaration.returnInfo.typeName
+	if len(returnType) > 0 {
 		if returnType == UNKNOWN_TYPE {
-			fmt.Printf("WARN: Failed to determine return type for function %s\n", declaration.GetScopedName())
+			fmt.Printf("ERROR: Failed to determine return type for function %s\n", declaration.GetScopedName())
 		}
 		sb.WriteString(fmt.Sprintf("%s ", returnType))
 	}
@@ -582,7 +369,7 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 		for ii := 0; ii < count; ii++ {
 			p := (*declaration.parameters)[ii]
 			if p.typeName == UNKNOWN_TYPE {
-				fmt.Printf("WARN: Failed to determine type for function parameter %s(%s)\n", declaration.GetScopedName(), p.parameterName)
+				fmt.Printf("ERROR: Failed to determine type for function parameter %s(%s)\n", declaration.GetScopedName(), p.parameterName)
 			}
 			sb.WriteString(fmt.Sprintf("%s %s", p.typeName, p.parameterName))
 			if ii < count-1 {
@@ -657,12 +444,12 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 			p := &params[ii]
 			p.typeName = UNKNOWN_TYPE
 			p.parameterName = fmt.Sprintf("param_%d", ii)
-			p.potentialTypes = map[string]bool{}
 		}
 		declaration.parameters = &params
 
-		if declaration.returnTypeName == "UNKNOWN" && hasSchedules {
-			declaration.returnTypeName = "task"
+		// Anything with schedules inside it MUST be a task
+		if declaration.returnInfo.typeName == "UNKNOWN" && hasSchedules {
+			declaration.returnInfo.typeName = "task"
 		}
 	}
 
@@ -680,7 +467,8 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 			}
 			VARIABLE_ID_COUNTER++
 			definition.scope.variables = append(definition.scope.variables, v)
-			param.id = v.id
+			// Save off a reference to this variable for use elsewhere
+			param.variable = v
 		}
 
 		definition.scope.localVariableIndexOffset = uint32(len(*declaration.parameters))
@@ -813,14 +601,4 @@ func PrintFunctionAssembly(declaration *FunctionDeclaration, startingIndex int, 
 			return
 		}
 	}
-}
-
-func ResolveUndefinedFunctionElements() {
-	// for _, fnc := range DECOMPILED_FUNCS {
-	// 	if fnc.declaration.parameters == nil {
-	// 		if len(fnc.scope.variables) == 0 {
-	// 			fnc.declaration.parameters = &[]FunctionParameter{}
-	// 		}
-	// 	}
-	// }
 }

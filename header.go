@@ -88,7 +88,7 @@ func (pkg *PackageInfo) DetectDepdencies() {
 	// Check the package's functions
 	for _, fnc := range pkg.functions {
 		// Check the return type
-		if handleInfo, ok := HANDLE_MAP[fnc.returnTypeName]; ok {
+		if handleInfo, ok := HANDLE_MAP[fnc.GetReturnType()]; ok {
 			if handleInfo.sourcePackage != pkg.name && handleInfo.sourcePackage != SYSTEM_PACKAGE {
 				pkg.dependencies[handleInfo.sourcePackage] = true
 			}

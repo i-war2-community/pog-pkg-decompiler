@@ -14,6 +14,7 @@ var OUTPUT_FILE string
 var OUTPUT_ASSEMBLY bool
 var ASSEMBLY_ONLY bool
 var ASSEMBLY_OFFSET_PREFIX bool
+var DEBUG_LOGGING bool
 
 var EXPORTING_PACKAGE string
 var IMPORTING_PACKAGE string
@@ -73,10 +74,13 @@ func renderPackageImports(writer CodeWriter) {
 		import_map[pkgName] = true
 	}
 
-	// if _, ok := import_map["Debug"]; !ok {
-	// 	imports = append(imports, "Debug")
-	// 	import_map["Debug"] = true
-	// }
+	// This is needed to call the logging function in script
+	if DEBUG_LOGGING {
+		if _, ok := import_map["Debug"]; !ok {
+			imports = append(imports, "Debug")
+			import_map["Debug"] = true
+		}
+	}
 
 	// Now check for any missing dependencies
 	for ii := 0; ii < len(imports); ii++ {
@@ -420,21 +424,18 @@ func resolveAllTypes() {
 		resolveCount := 0
 
 		// First reset all the possible types
-		for ii := range DECOMPILED_FUNCS {
-			DECOMPILED_FUNCS[ii].ResetPossibleTypes()
+		for _, fnc := range DECOMPILED_FUNCS {
+			fnc.ResetPossibleTypes()
 		}
 
 		// Call the type resolution done on the statements
-		for ii := range DECOMPILED_FUNCS {
-			DECOMPILED_FUNCS[ii].ResolveBodyTypes()
+		for _, fnc := range DECOMPILED_FUNCS {
+			resolveCount += fnc.ResolveBodyTypes()
 		}
 
-		for ii := range DECOMPILED_FUNCS {
-			fnc := DECOMPILED_FUNCS[ii]
-			if fnc.declaration.parameters == nil {
-				continue
-			}
-			resolveCount += fnc.ResolveHeaderTypes()
+		// Call the type resolution done on the function parameters and return types
+		for _, fnc := range DECOMPILED_FUNCS {
+			resolveCount += fnc.ResolveDeclarationTypes()
 		}
 		if resolveCount == 0 {
 			break
@@ -444,8 +445,8 @@ func resolveAllTypes() {
 
 func checkAllCode() {
 	// Check the code of each function
-	for ii := range DECOMPILED_FUNCS {
-		DECOMPILED_FUNCS[ii].CheckCode()
+	for _, fnc := range DECOMPILED_FUNCS {
+		fnc.CheckCode()
 	}
 }
 
@@ -455,6 +456,7 @@ func main() {
 	flag.BoolVar(&OUTPUT_ASSEMBLY, "assembly", false, "Have the decompiler output the 'assembly' for each function as comments above the function.")
 	flag.BoolVar(&ASSEMBLY_ONLY, "assembly-only", false, "Have the decompiler output only the assembly for the package.")
 	flag.BoolVar(&ASSEMBLY_OFFSET_PREFIX, "assembly-offset-prefix", true, "Prefix each line of assembly with its binary address.")
+	flag.BoolVar(&DEBUG_LOGGING, "debug", false, "Output code that logs debug info at the start of every function.")
 	flag.Parse()
 
 	// TODO: Proper arguments later when we need some
@@ -533,8 +535,6 @@ func main() {
 		return
 	}
 
-	ResolveUndefinedFunctionElements()
-
 	// Resolve types until no more are resolved
 	resolveAllTypes()
 
@@ -546,7 +546,7 @@ func main() {
 				param := &params[ii]
 				if param.typeName == UNKNOWN_TYPE {
 					param.typeName = "int"
-					param.potentialTypes["int"] = true
+					param.variable.AddReferencedType("int")
 					fmt.Printf("WARN: Failed to resolve the type for parameter %s of function %s, defaulting to int.\n", param.parameterName, fnc.declaration.GetScopedName())
 				}
 			}
@@ -556,7 +556,6 @@ func main() {
 	}
 
 	// Resolve types one more time now that we have our functions better defined
-	resolveAllTypes()
 	resolveAllTypes()
 
 	// Fix functions with unknown return types

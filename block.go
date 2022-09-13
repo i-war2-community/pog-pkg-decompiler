@@ -94,9 +94,7 @@ func (og *OpGraph) SetPossibleType(scope *Scope, typeName string) {
 
 	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL:
 		fncData := og.operation.data.(FunctionCallData)
-		if IsEnumType(typeName) {
-			fncData.declaration.possibleReturnTypes[typeName] = true
-		}
+		fncData.declaration.returnInfo.AddReferencedType(typeName)
 	}
 }
 
@@ -196,12 +194,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 	case OP_FUNCTION_CALL_IMPORTED, OP_TASK_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_LOCAL:
 		funcData := og.operation.data.(FunctionCallData)
-		if funcData.declaration.returnTypeName != UNKNOWN_TYPE {
-			if funcData.declaration.returnTypeName == "task" {
-				og.typeName = "htask"
-			} else {
-				og.typeName = funcData.declaration.returnTypeName
-			}
+		funcReturn := funcData.declaration.GetReturnType()
+		if funcReturn != UNKNOWN_TYPE {
+			og.typeName = funcReturn
 		}
 
 		if funcData.declaration.parameters != nil && len(*funcData.declaration.parameters) == len(og.children) {
@@ -211,6 +206,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 				commonType := UNKNOWN_TYPE
 
+				// TODO: More here....
 				if IsHandleType(child.typeName) && IsHandleType(param.typeName) {
 					if HandleIsDerivedFrom(child.typeName, param.typeName) {
 						commonType = child.typeName
@@ -232,17 +228,15 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				}
 
 				if commonType != UNKNOWN_TYPE {
-					param.potentialTypes[commonType] = true
+					if funcData.declaration.autoDetectTypes {
+						param.variable.AddAssignedType(commonType)
+					}
 					child.SetPossibleType(scope, commonType)
 				} else {
 					switch child.operation.opcode {
-					case OP_LITERAL_ZERO:
-						param.potentialTypes["bool"] = true
-						param.potentialTypes["int"] = true
-
-					case OP_LITERAL_ONE:
-						param.potentialTypes["bool"] = true
-						param.potentialTypes["int"] = true
+					case OP_LITERAL_ZERO, OP_LITERAL_ONE:
+						param.variable.AddAssignedType("bool")
+						param.variable.AddAssignedType("int")
 					}
 				}
 
@@ -410,59 +404,54 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		}
 
 	case OP_JUMP:
-		if og.code != nil && strings.HasPrefix(*og.code, "return") {
-			//if scope.function.returnTypeName == UNKNOWN_TYPE {
-			returnType := ""
-			if len(og.children) > 0 {
-				switch og.children[0].operation.opcode {
-				case OP_LITERAL_ZERO, OP_LITERAL_ONE:
-					scope.function.possibleReturnTypes["bool"] = true
-					scope.function.possibleReturnTypes["int"] = true
-				default:
-					returnType = og.children[0].typeName
-					if returnType != UNKNOWN_TYPE {
-						scope.function.possibleReturnTypes[returnType] = true
-					}
+		// If this is a return statement, we need to add assigned types to our function's return
+		if og.code != nil && strings.HasPrefix(*og.code, "return") && len(og.children) == 1 {
+			returnOp := og.children[0]
+			returnType := scope.function.returnInfo.typeName
+			switch returnOp.operation.opcode {
+			case OP_LITERAL_ZERO, OP_LITERAL_ONE:
+				scope.function.returnInfo.AddAssignedType("bool")
+				scope.function.returnInfo.AddAssignedType("int")
+			default:
+				if returnOp.typeName != UNKNOWN_TYPE {
+					scope.function.returnInfo.AddAssignedType(returnOp.typeName)
 				}
 			}
-			//} else {
-			if scope.function.returnTypeName != UNKNOWN_TYPE {
-				if len(og.children) > 0 {
-					returnOp := og.children[0]
+			// If the function has a known return type, see if we need to convert any integers to bools or enums
+			if returnType != UNKNOWN_TYPE {
+				// Make sure local variables and local function return types are impacted by being returned here
+				returnOp.SetPossibleType(scope, returnType)
 
-					if IsEnumType(scope.function.returnTypeName) {
-
-						// Make sure any local variable knows it should be an enum type
-						returnOp.SetPossibleType(scope, scope.function.returnTypeName)
-
-						if IsLiteralInteger(returnOp.operation) {
-							value := GetLiteralIntegerValue(returnOp.operation)
-							enumData := ENUM_MAP[scope.function.returnTypeName]
-							if value >= 0 {
-								name := enumData.valueToName[uint32(value)]
-								if len(name) > 0 {
-									returnOp.code = &name
-								}
+				if IsEnumType(returnType) {
+					// Convert literal integers to enums
+					if IsLiteralInteger(returnOp.operation) {
+						value := GetLiteralIntegerValue(returnOp.operation)
+						enumData := ENUM_MAP[returnType]
+						if value >= 0 {
+							name := enumData.valueToName[uint32(value)]
+							if len(name) > 0 {
+								returnOp.code = &name
 							}
 						}
-					} else {
-						switch returnOp.operation.opcode {
-						case OP_LITERAL_ZERO:
-							if IsHandleType(scope.function.returnTypeName) {
-								returnOp.code = &noneCode
-							} else if scope.function.returnTypeName == "bool" {
-								returnOp.code = &falseCode
-							}
+					}
+				} else {
+					switch returnOp.operation.opcode {
+					case OP_LITERAL_ZERO:
+						// Convert zero to none or false
+						if IsHandleType(returnType) {
+							returnOp.code = &noneCode
+						} else if returnType == "bool" {
+							returnOp.code = &falseCode
+						}
 
-						case OP_LITERAL_ONE:
-							if scope.function.returnTypeName == "bool" {
-								returnOp.code = &trueCode
-							}
+					case OP_LITERAL_ONE:
+						// Convert one to true
+						if returnType == "bool" {
+							returnOp.code = &trueCode
 						}
 					}
 				}
 			}
-			//}
 		}
 
 	case OP_JUMP_IF_FALSE, OP_JUMP_IF_TRUE:
