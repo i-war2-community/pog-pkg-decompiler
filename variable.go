@@ -19,18 +19,20 @@ var HANDLE_MAP map[string]HandleTypeInfo = map[string]HandleTypeInfo{
 		baseType:      "",
 		sourcePackage: SYSTEM_PACKAGE,
 	},
-	"list": {
-		baseType:      "",
-		sourcePackage: "List",
-	},
-	"set": {
-		baseType:      "",
-		sourcePackage: "Set",
-	},
 }
 
 func IsHandleType(typeName string) bool {
 	_, ok := HANDLE_MAP[typeName]
+	return ok
+}
+
+var COLLECTION_MAP = map[string]bool{
+	"set":  true,
+	"list": true,
+}
+
+func IsCollectionType(typeName string) bool {
+	_, ok := COLLECTION_MAP[typeName]
 	return ok
 }
 
@@ -109,17 +111,40 @@ func getEnumType(types []string) string {
 	return UNKNOWN_TYPE
 }
 
+func getCollectionType(types []string) string {
+	collectionTypeCount := 0
+	var collectionType string
+
+	for _, typeName := range types {
+		if IsCollectionType(typeName) {
+			collectionTypeCount++
+			collectionType = typeName
+		}
+	}
+
+	if collectionTypeCount == 1 {
+		return collectionType
+	}
+
+	return UNKNOWN_TYPE
+}
+
 func getBestNonHandleType(types []string) string {
 	hasBool := false
 	hasInt := false
 	hasFloat := false
 	hasString := false
 
-	// Check which enum type we should use
+	// Check to see if we are an enum
 	enumType := getEnumType(types)
-
 	if enumType != UNKNOWN_TYPE {
 		return enumType
+	}
+
+	// Check to see if we are a collection
+	collectionType := getCollectionType(types)
+	if collectionType != UNKNOWN_TYPE {
+		return collectionType
 	}
 
 	for _, t := range types {
@@ -183,6 +208,9 @@ func getTypeFromReferencedTypes(referenced []string) string {
 }
 
 func (v *Variable) ResolveType() bool {
+	// if v.typeName != UNKNOWN_TYPE {
+	// 	return false
+	// }
 	detectedType := UNKNOWN_TYPE
 	assigned := v.GetAssignedTypes()
 	referenced := v.GetReferencedTypes()
@@ -195,64 +223,12 @@ func (v *Variable) ResolveType() bool {
 	}
 
 	if v.typeName != detectedType {
+		//fmt.Printf("%d changed from %s to %s\n", v.id, v.typeName, detectedType)
 		v.typeName = detectedType
 		return true
 	}
 
 	return false
-
-	// if len(possibleTypes) == 1 {
-
-	// 	for key := range possibleTypes {
-	// 		if v.typeName != key {
-	// 			v.typeName = key
-	// 			return true
-	// 		}
-	// 		return false
-	// 	}
-	// } else if len(possibleTypes) > 1 {
-
-	// 	// Find the most basic type of all those assigned
-	// 	assignedTypes := v.GetAssignedTypes()
-	// 	referencedTypes := v.GetReferencedTypes()
-
-	// 	baseType := findBaseTypeForAssignedTypes(assignedTypes)
-	// 	baseType = findBaseTypeForReferencedTypes(referencedTypes, baseType)
-
-	// 	if baseType != UNKNOWN_TYPE {
-	// 		if v.typeName != baseType {
-	// 			v.typeName = baseType
-	// 			return true
-	// 		}
-	// 		return false
-	// 	} else {
-
-	// 		// Check for enum type
-	// 		enumType := getEnumType(possibleTypes)
-	// 		if enumType != UNKNOWN_TYPE {
-	// 			if v.typeName != enumType {
-	// 				v.typeName = enumType
-	// 				return true
-	// 			}
-	// 			return false
-	// 		}
-
-	// 		if len(assignedTypes) == 1 {
-	// 			if v.typeName != assignedTypes[0] {
-	// 				v.typeName = assignedTypes[0]
-	// 				return true
-	// 			}
-	// 			return false
-	// 		}
-	// 		// Find the best possible non-handle type
-	// 		bestType := pickBestNonHandleType(possibleTypes)
-	// 		if v.typeName != bestType {
-	// 			v.typeName = bestType
-	// 			return true
-	// 		}
-	// 	}
-	// }
-	// return false
 }
 
 type EnumTypeInfo struct {

@@ -213,7 +213,7 @@ func readSectionHeader(file *os.File) (*SectionHeader, error) {
 	return result, nil
 }
 
-func readSections(file *os.File, maximumLength uint32, writer CodeWriter) error {
+func readSections(file *os.File, maximumLength uint32) error {
 
 	var length uint32 = 0
 
@@ -232,7 +232,7 @@ func readSections(file *os.File, maximumLength uint32, writer CodeWriter) error 
 			return err
 		}
 
-		err = readSection(file, section, writer)
+		err = readSection(file, section)
 		if err != nil {
 			fmt.Printf("Error: Failed to read section: %v", err)
 			return err
@@ -249,7 +249,7 @@ func readSections(file *os.File, maximumLength uint32, writer CodeWriter) error 
 	return nil
 }
 
-func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error {
+func readSection(file *os.File, section *SectionHeader) error {
 	var err error = nil
 
 	switch section.identifier {
@@ -330,7 +330,7 @@ func readSection(file *os.File, section *SectionHeader, writer CodeWriter) error
 		}
 
 	case "CODE":
-		err = readCodeSection(file, writer)
+		err = readCodeSection(file)
 	}
 
 	return err
@@ -357,7 +357,7 @@ func readFunctionImportSection(file *os.File, funcName string) error {
 	return nil
 }
 
-func readCodeSection(file *os.File, writer CodeWriter) error {
+func readCodeSection(file *os.File) error {
 
 	buffer := make([]byte, 4)
 	n, err := file.Read(buffer)
@@ -410,7 +410,7 @@ func readCodeSection(file *os.File, writer CodeWriter) error {
 
 		if declaration != nil {
 			var def *FunctionDefinition
-			idx, def = DecompileFunction(declaration, idx, initialOffset, writer)
+			idx, def = DecompileFunction(declaration, idx, initialOffset)
 			DECOMPILED_FUNCS = append(DECOMPILED_FUNCS, def)
 		}
 	}
@@ -448,6 +448,17 @@ func checkAllCode() {
 	for _, fnc := range DECOMPILED_FUNCS {
 		fnc.CheckCode()
 	}
+}
+
+func createWriter() (CodeWriter, error) {
+	fmt.Printf("Writing pog: %s\n", OUTPUT_FILE)
+
+	outputFile, err := os.OpenFile(OUTPUT_FILE, os.O_WRONLY|os.O_CREATE|os.O_SYNC|os.O_TRUNC, 0644)
+
+	if err != nil {
+		return nil, err
+	}
+	return NewCodeWriter(outputFile), nil
 }
 
 func main() {
@@ -501,18 +512,7 @@ func main() {
 	f.Seek(4, 1)
 	form.length -= 4
 
-	fmt.Printf("Writing pog: %s\n", OUTPUT_FILE)
-
-	outputFile, err := os.OpenFile(OUTPUT_FILE, os.O_WRONLY|os.O_CREATE|os.O_SYNC|os.O_TRUNC, 0644)
-
-	if err != nil {
-		fmt.Printf("Error: Failed to write file: %v\n", err)
-		return
-	}
-	writer := NewCodeWriter(outputFile)
-	defer outputFile.Close()
-
-	err = readSections(f, form.length, writer)
+	err = readSections(f, form.length)
 
 	if err != nil {
 		fmt.Printf("Error: Failed to read file: %v", err)
@@ -521,6 +521,13 @@ func main() {
 
 	// See if we should just output assembly
 	if ASSEMBLY_ONLY {
+
+		writer, err := createWriter()
+		if err != nil {
+			fmt.Printf("Error: Failed to write file: %v\n", err)
+			return
+		}
+
 		OUTPUT_ASSEMBLY = true
 		for idx := 0; idx < len(OPERATIONS); idx++ {
 			operation := OPERATIONS[idx]
@@ -547,7 +554,9 @@ func main() {
 				if param.typeName == UNKNOWN_TYPE {
 					param.typeName = "int"
 					param.variable.AddReferencedType("int")
-					fmt.Printf("WARN: Failed to resolve the type for parameter %s of function %s, defaulting to int.\n", param.parameterName, fnc.declaration.GetScopedName())
+					if param.variable.refCount > 0 {
+						fmt.Printf("WARN: Failed to resolve the type for parameter %s of function %s, defaulting to int.\n", param.parameterName, fnc.declaration.GetScopedName())
+					}
 				}
 			}
 			// Lock in our header types
@@ -566,6 +575,13 @@ func main() {
 	// We need to detect the dependencies so we can reorder imports accordingly
 	DetectPackageDependencies()
 
+	writer, err := createWriter()
+	if err != nil {
+		fmt.Printf("Error: Failed to write file: %v\n", err)
+		return
+	}
+
+	// Start writing the file
 	writer.Appendf("package %s;\n\n", EXPORTING_PACKAGE)
 	renderPackageImports(writer)
 	renderFunctionExports(writer)

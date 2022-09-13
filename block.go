@@ -176,6 +176,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	case OP_CAST_FLT_TO_INT, OP_BITWISE_AND, OP_BITWISE_OR, OP_INT_NEG, OP_LITERAL_BYTE, OP_LITERAL_SHORT, OP_LITERAL_INT:
 		og.typeName = "int"
 
+	case OP_LITERAL_ONE, OP_LITERAL_ZERO:
+		og.typeName = "bool"
+
 	case OP_INT_ADD, OP_INT_SUB, OP_INT_MUL, OP_INT_DIV, OP_INT_MOD:
 		og.typeName = "int"
 		og.children[0].SetPossibleType(scope, "int")
@@ -195,6 +198,12 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	case OP_FUNCTION_CALL_IMPORTED, OP_TASK_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_LOCAL:
 		funcData := og.operation.data.(FunctionCallData)
 		funcReturn := funcData.declaration.GetReturnType()
+
+		// These will always return an htask
+		if og.operation.opcode == OP_TASK_CALL_IMPORTED || og.operation.opcode == OP_TASK_CALL_LOCAL {
+			funcReturn = "htask"
+		}
+
 		if funcReturn != UNKNOWN_TYPE {
 			og.typeName = funcReturn
 		}
@@ -380,7 +389,6 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		case OP_LITERAL_ONE:
 			// It could be either of these really
 			v.AddAssignedType("bool")
-			v.AddAssignedType("int")
 
 			// If we are assigning literal true or literal false
 			if v.typeName == "bool" {
@@ -395,6 +403,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		}
 
 		if childType != UNKNOWN_TYPE {
+			if v.typeName != UNKNOWN_TYPE {
+				og.children[0].SetPossibleType(scope, v.typeName)
+			}
 			og.typeName = childType
 			if og.typeName != UNKNOWN_TYPE {
 				v.AddAssignedType(og.typeName)

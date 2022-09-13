@@ -194,12 +194,16 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 		referencedTypes: map[string]bool{},
 		typeName:        UNKNOWN_TYPE,
 	}
+
 	result.autoDetectTypes = true
 
 	// Check to see if we have this one already
 	if existing, ok := FUNC_DECLARATIONS[result.GetScopedName()]; ok {
 		return existing
 	}
+
+	result.returnInfo.id = VARIABLE_ID_COUNTER
+	VARIABLE_ID_COUNTER++
 
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
@@ -291,6 +295,11 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 		result.parameters = &[]FunctionParameter{}
 	}
 
+	if result.pkg == EXPORTING_PACKAGE {
+		result.returnInfo.id = VARIABLE_ID_COUNTER
+		VARIABLE_ID_COUNTER++
+	}
+
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
 }
@@ -327,7 +336,7 @@ func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint3
 		}
 
 		if lv.typeName == UNKNOWN_TYPE {
-			fmt.Printf("ERROR: Failed to determine type for local variable %s in function %s\n", lv.variableName, declaration.GetScopedName())
+			fmt.Printf("ERROR: Failed to determine type for local variable %s id %d in function %s\n", lv.variableName, lv.id, declaration.GetScopedName())
 		}
 
 		if assignment, ok := assignments[lv.stackIndex]; ok {
@@ -356,7 +365,7 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 	returnType := declaration.returnInfo.typeName
 	if len(returnType) > 0 {
 		if returnType == UNKNOWN_TYPE {
-			fmt.Printf("ERROR: Failed to determine return type for function %s\n", declaration.GetScopedName())
+			fmt.Printf("ERROR: Failed to determine return type id %d for function %s\n", declaration.returnInfo.id, declaration.GetScopedName())
 		}
 		sb.WriteString(fmt.Sprintf("%s ", returnType))
 	}
@@ -369,7 +378,7 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 		for ii := 0; ii < count; ii++ {
 			p := (*declaration.parameters)[ii]
 			if p.typeName == UNKNOWN_TYPE {
-				fmt.Printf("ERROR: Failed to determine type for function parameter %s(%s)\n", declaration.GetScopedName(), p.parameterName)
+				fmt.Printf("ERROR: Failed to determine type for function parameter %s(%s) id %d\n", declaration.GetScopedName(), p.parameterName, p.variable.id)
 			}
 			sb.WriteString(fmt.Sprintf("%s %s", p.typeName, p.parameterName))
 			if ii < count-1 {
@@ -383,7 +392,7 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 	return sb.String()
 }
 
-func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) (int, *FunctionDefinition) {
+func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64) (int, *FunctionDefinition) {
 	definition := &FunctionDefinition{
 		startingIndex: startingIndex,
 		initialOffset: initialOffset,
