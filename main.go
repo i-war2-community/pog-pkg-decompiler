@@ -12,6 +12,8 @@ import (
 var INCLUDES_DIR string
 var OUTPUT_FILE string
 var OUTPUT_ASSEMBLY bool
+var ASSEMBLY_ONLY bool
+var ASSEMBLY_OFFSET_PREFIX bool
 
 var EXPORTING_PACKAGE string
 var IMPORTING_PACKAGE string
@@ -451,6 +453,8 @@ func main() {
 	flag.StringVar(&INCLUDES_DIR, "includes", "", "The includes directory with package headers.")
 	flag.StringVar(&OUTPUT_FILE, "output", "", "The file path to which the pog file will be written.")
 	flag.BoolVar(&OUTPUT_ASSEMBLY, "assembly", false, "Have the decompiler output the 'assembly' for each function as comments above the function.")
+	flag.BoolVar(&ASSEMBLY_ONLY, "assembly-only", false, "Have the decompiler output only the assembly for the package.")
+	flag.BoolVar(&ASSEMBLY_OFFSET_PREFIX, "assembly-offset-prefix", true, "Prefix each line of assembly with its binary address.")
 	flag.Parse()
 
 	// TODO: Proper arguments later when we need some
@@ -497,7 +501,7 @@ func main() {
 
 	fmt.Printf("Writing pog: %s\n", OUTPUT_FILE)
 
-	outputFile, err := os.OpenFile(OUTPUT_FILE, os.O_RDWR|os.O_CREATE, 0644)
+	outputFile, err := os.OpenFile(OUTPUT_FILE, os.O_WRONLY|os.O_CREATE|os.O_SYNC|os.O_TRUNC, 0644)
 
 	if err != nil {
 		fmt.Printf("Error: Failed to write file: %v\n", err)
@@ -510,6 +514,22 @@ func main() {
 
 	if err != nil {
 		fmt.Printf("Error: Failed to read file: %v", err)
+		return
+	}
+
+	// See if we should just output assembly
+	if ASSEMBLY_ONLY {
+		OUTPUT_ASSEMBLY = true
+		for idx := 0; idx < len(OPERATIONS); idx++ {
+			operation := OPERATIONS[idx]
+			if ASSEMBLY_OFFSET_PREFIX {
+				writer.Appendf("// 0x%08X ", operation.offset)
+			} else {
+				writer.Append("// ")
+			}
+			operation.WriteAssembly(writer)
+			writer.Append("\n")
+		}
 		return
 	}
 

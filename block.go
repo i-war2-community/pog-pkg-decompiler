@@ -107,7 +107,7 @@ func (og *OpGraph) ShouldRender() bool {
 	}
 
 	// Don't render string init statements
-	if og.operation.opcode == OP_POP_STACK && og.children[0].operation.opcode == OP_VARIABLE_WRITE && og.children[0].children[0].operation.opcode == OP_HANDLE_INIT {
+	if og.operation.opcode == OP_POP_STACK && og.children[0].operation.opcode == OP_VARIABLE_WRITE && og.children[0].children[0].operation.opcode == OP_VARIABLE_INIT {
 		return false
 	}
 	return true
@@ -306,15 +306,16 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
-		if child1IsHandle {
+		if child1IsHandle && child2IsHandle {
+			fmt.Printf("Test")
+
+		} else if child1IsHandle {
 			if child2IsCast {
 				child2.children[0].SetPossibleType(scope, "hobject")
 			} else {
 				child2.SetPossibleType(scope, child1.typeName)
 			}
-		}
-
-		if child2IsHandle {
+		} else if child2IsHandle {
 			if child2IsCast {
 				child1.children[0].SetPossibleType(scope, "hobject")
 			} else {
@@ -344,7 +345,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		varData := og.operation.data.(VariableWriteData)
 		v := scope.variables[varData.index]
 		// Add to the variable's ref count if this isn't just from a handle init
-		if og.children[0].operation.opcode != OP_HANDLE_INIT {
+		if og.children[0].operation.opcode != OP_VARIABLE_INIT {
 			v.refCount++
 		}
 
@@ -475,45 +476,45 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 		child2IsCast := child2.operation.opcode == OP_CAST_HANDLE_TO_BOOL
 
 		if !child1IsCast && !child2IsCast && child1IsHandle && child2IsHandle && child1.typeName != child2.typeName {
-			// cw := NewCodeWriter(os.Stdout)
-			// cw.Appendf("ERROR: Mismatched handle types in equivalence check. This will cause both handles to be cast to bools and then compared:\n")
-			// cw.PushIndent()
-			// printGraphNode(og, cw, false)
-			// cw.Append("\n")
-			// cw.Appendf("L Type: %s\n", child1.typeName)
-			// cw.Appendf("R Type: %s\n", child2.typeName)
-			// cw.PopIndent()
-			// cw.Append("\n")
+			cw := NewCodeWriter(os.Stdout)
+			cw.Appendf("ERROR: Mismatched handle types in equivalence check. This will cause both handles to be cast to bools and then compared:\n")
+			cw.PushIndent()
+			printGraphNode(og, cw, false)
+			cw.Append("\n")
+			cw.Appendf("L Type: %s\n", child1.typeName)
+			cw.Appendf("R Type: %s\n", child2.typeName)
+			cw.PopIndent()
+			cw.Append("\n")
 
-			childIdx := -1
-			targetType := ""
+			// childIdx := -1
+			// targetType := ""
 
-			if HandleIsDerivedFrom(child1.typeName, child2.typeName) {
-				childIdx = 0
-				targetType = child2.typeName
+			// if HandleIsDerivedFrom(child1.typeName, child2.typeName) {
+			// 	childIdx = 0
+			// 	targetType = child2.typeName
 
-			} else if HandleIsDerivedFrom(child2.typeName, child1.typeName) {
-				childIdx = 1
-				targetType = child1.typeName
-			} else {
-				fmt.Printf("ERROR: Failed to insert cast to fix mismatched handle type comparison.\n")
-				return
-			}
+			// } else if HandleIsDerivedFrom(child2.typeName, child1.typeName) {
+			// 	childIdx = 1
+			// 	targetType = child1.typeName
+			// } else {
+			// 	fmt.Printf("ERROR: Failed to insert cast to fix mismatched handle type comparison.\n")
+			// 	return
+			// }
 
-			// Get the appropriate function to make the cast
-			castFunction := GetCastFunctionForHandleType(targetType)
+			// // Get the appropriate function to make the cast
+			// castFunction := GetCastFunctionForHandleType(targetType)
 
-			// HACK: Insert an operation to perform the cast once we render the code
-			castOp := &OpGraph{
-				operation: &Operation{
-					opcode: OP_CAST_HANDLE_TO_HANDLE,
-				},
-				children: []*OpGraph{
-					og.children[childIdx],
-				},
-				code: &castFunction,
-			}
-			og.children[childIdx] = castOp
+			// // HACK: Insert an operation to perform the cast once we render the code
+			// castOp := &OpGraph{
+			// 	operation: &Operation{
+			// 		opcode: OP_CAST_HANDLE_TO_HANDLE,
+			// 	},
+			// 	children: []*OpGraph{
+			// 		og.children[childIdx],
+			// 	},
+			// 	code: &castFunction,
+			// }
+			// og.children[childIdx] = castOp
 		}
 	}
 }

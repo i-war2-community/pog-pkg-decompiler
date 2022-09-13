@@ -94,13 +94,26 @@ func findBaseTypeForAssignedTypes(assignedTypes []string) string {
 
 func findBaseTypeForReferencedTypes(referencedTypes []string, startingType string) string {
 	if len(referencedTypes) > 0 {
-		baseType := startingType
+		baseType := UNKNOWN_TYPE
+		checkStartingType := false
+
+		if startingType != UNKNOWN_TYPE {
+			checkStartingType = false
+		}
 
 		for idx := 0; idx < len(referencedTypes); idx++ {
 			referenced := referencedTypes[idx]
 
 			if !IsHandleType(referenced) {
 				continue
+			}
+
+			if checkStartingType {
+				if HandleIsDerivedFrom(startingType, referenced) {
+					baseType = referenced
+					checkStartingType = false
+					continue
+				}
 			}
 
 			if baseType == UNKNOWN_TYPE {
@@ -158,7 +171,7 @@ func (fd *FunctionDefinition) ResolveBodyTypes() {
 
 func (fd *FunctionDefinition) CheckCode() {
 	// Resolve variable types
-	CheckCode(fd.scope, fd.body)
+	//CheckCode(fd.scope, fd.body)
 }
 
 func getEnumType(possibleTypes map[string]bool) string {
@@ -528,7 +541,12 @@ func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint3
 	for ii := 0; ii < len(variables); ii++ {
 		lv := variables[ii]
 		if lv.typeName == UNKNOWN_TYPE && lv.refCount == 0 {
-			lv.typeName = "int"
+			// If it has an init, it is probably a string
+			if lv.hasInit {
+				lv.typeName = "string"
+			} else {
+				lv.typeName = "int"
+			}
 		}
 
 		if lv.typeName == UNKNOWN_TYPE {
@@ -589,9 +607,6 @@ func renderFunctionDefinitionHeader(declaration *FunctionDeclaration) string {
 }
 
 func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) (int, *FunctionDefinition) {
-	// if OUTPUT_ASSEMBLY {
-	// 	PrintFunctionAssembly(declaration, startingIndex, initialOffset, writer)
-	// }
 	definition := &FunctionDefinition{
 		startingIndex: startingIndex,
 		initialOffset: initialOffset,
@@ -705,6 +720,12 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	endIdx := 0
 
 	for idx := startingIndex; idx < len(OPERATIONS); idx++ {
+		// Check for handle inits
+		if OPERATIONS[idx].opcode == OP_VARIABLE_INIT && OPERATIONS[idx+1].opcode == OP_VARIABLE_WRITE {
+			varData := OPERATIONS[idx+1].data.(VariableWriteData)
+			definition.scope.variables[varData.index].hasInit = true
+		}
+		// Keep going until we find the function end operation
 		if OPERATIONS[idx].opcode == OP_FUNCTION_END {
 			idx--
 
@@ -745,6 +766,10 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	// Save off the ending index
 	definition.endingIndex = endIdx
 
+	if ASSEMBLY_ONLY {
+		return endIdx, definition
+	}
+
 	variableCount := uint32(len(definition.scope.variables))
 
 	// Check for out of bounds variable access
@@ -779,10 +804,18 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 }
 
 func PrintFunctionAssembly(declaration *FunctionDeclaration, startingIndex int, initialOffset int64, writer CodeWriter) {
-	writer.Appendf("// ==================== START_FUNCTION %s\n", renderFunctionDefinitionHeader(declaration))
+	if ASSEMBLY_ONLY {
+		writer.Appendf("// ==================== START_FUNCTION %s\n", declaration.GetScopedName())
+	} else {
+		writer.Appendf("// ==================== START_FUNCTION %s\n", renderFunctionDefinitionHeader(declaration))
+	}
 	for idx := startingIndex; idx < len(OPERATIONS); idx++ {
 		operation := OPERATIONS[idx]
-		writer.Appendf("// 0x%08X ", operation.offset)
+		if ASSEMBLY_OFFSET_PREFIX {
+			writer.Appendf("// 0x%08X ", operation.offset)
+		} else {
+			writer.Append("// ")
+		}
 		operation.WriteAssembly(writer)
 		writer.Append("\n")
 

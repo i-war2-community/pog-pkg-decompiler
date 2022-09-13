@@ -34,6 +34,7 @@ type Variable struct {
 	typeName        string
 	variableName    string
 	stackIndex      uint32
+	hasInit         bool
 	assignedTypes   map[string]bool
 	referencedTypes map[string]bool
 	refCount        int
