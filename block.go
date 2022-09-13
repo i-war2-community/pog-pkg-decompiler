@@ -29,7 +29,7 @@ func (bc *BlockContext) IsCurrentBlockIfBlock() bool {
 }
 
 type BlockElement interface {
-	Render(writer CodeWriter)
+	Render(scope *Scope, writer CodeWriter)
 	IsBlock() bool
 	RendersAsBlock() bool
 	ResolveTypes(scope *Scope)
@@ -498,18 +498,32 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 			cw := NewCodeWriter(os.Stdout)
 			cw.Appendf("ERROR: Mismatched handle types in equivalence check. This will cause both handles to be cast to bools and then compared:\n")
 			cw.PushIndent()
-			og.Render(cw, false)
+			og.Render(scope, cw, false)
 			cw.Append("\n")
 			cw.Appendf("L Type: %s\n", child1.typeName)
 			cw.Appendf("R Type: %s\n", child2.typeName)
 			cw.PopIndent()
 			cw.Append("\n")
 		}
+
+	case OP_VARIABLE_WRITE:
+		variable := og.operation.GetVariable(scope)
+
+		// Add a name provider that looks for calls to certan "Globals" functions
+		np := &GlobalNameProvider{
+			assignment: og.children[0],
+		}
+		variable.potentialNames = append(variable.potentialNames, np)
+		fallthrough
+
+	case OP_VARIABLE_READ:
+		// Reset this so our computed name will get re-rendered
+		og.code = nil
 	}
 }
 
 func (node *OpGraph) ShouldRenderBeforeChidlren() bool {
-	if IsFunctionCall(node.operation) {
+	if node.operation.IsFunctionCall() {
 		return true
 	}
 
@@ -517,7 +531,7 @@ func (node *OpGraph) ShouldRenderBeforeChidlren() bool {
 }
 
 func (node *OpGraph) ShouldUseParentheses(onlyChild bool) bool {
-	if IsFunctionCall(node.operation) {
+	if node.operation.IsFunctionCall() {
 		return true
 	}
 
@@ -534,7 +548,12 @@ func (node *OpGraph) ShouldUseParentheses(onlyChild bool) bool {
 	return !onlyChild && popCount > 1
 }
 
-func (node *OpGraph) renderSelf(writer CodeWriter) {
+func (node *OpGraph) renderSelf(scope *Scope, writer CodeWriter) {
+	// See if this still needs to happen
+	if node.code == nil {
+		node.code = RenderOperationCode(node.operation, scope)
+	}
+
 	if node.code != nil {
 		writer.Append(*node.code)
 	} else {
@@ -547,27 +566,27 @@ func (node *OpGraph) renderSelf(writer CodeWriter) {
 	}
 }
 
-func (node *OpGraph) Render(writer CodeWriter, onlyChild bool) {
+func (node *OpGraph) Render(scope *Scope, writer CodeWriter, onlyChild bool) {
 
 	if !node.ShouldRenderBeforeChidlren() {
 		if node.ShouldUseParentheses(onlyChild) {
 			writer.Append("(")
 		}
 
-		node.children[0].Render(writer, false)
+		node.children[0].Render(scope, writer, false)
 
 		writer.Append(" ")
-		node.renderSelf(writer)
+		node.renderSelf(scope, writer)
 		writer.Append(" ")
 
-		node.children[1].Render(writer, false)
+		node.children[1].Render(scope, writer, false)
 
 		if node.ShouldUseParentheses(onlyChild) {
 			writer.Append(")")
 		}
 	} else {
 		// Render ourselves
-		node.renderSelf(writer)
+		node.renderSelf(scope, writer)
 
 		// Render our open parenthesis
 		if node.ShouldUseParentheses(onlyChild) {
@@ -579,7 +598,7 @@ func (node *OpGraph) Render(writer CodeWriter, onlyChild bool) {
 
 		// Render our children
 		for ii := len(node.children) - 1; ii >= 0; ii-- {
-			node.children[ii].Render(writer, true)
+			node.children[ii].Render(scope, writer, true)
 			if ii > 0 {
 				writer.Append(", ")
 			}
@@ -599,8 +618,8 @@ type Statement struct {
 	graph *OpGraph
 }
 
-func (s *Statement) Render(writer CodeWriter) {
-	s.graph.Render(writer, true)
+func (s *Statement) Render(scope *Scope, writer CodeWriter) {
+	s.graph.Render(scope, writer, true)
 }
 
 func (s *Statement) RenderAssemblyOffsets(writer CodeWriter) {
@@ -641,10 +660,10 @@ func shouldHaveNewlineBetween(element1 BlockElement, element2 BlockElement) bool
 	return true
 }
 
-func RenderBlockElements(elements []BlockElement, writer CodeWriter) {
+func RenderBlockElements(elements []BlockElement, scope *Scope, writer CodeWriter) {
 	for idx := 0; idx < len(elements); idx++ {
 		e := elements[idx]
-		e.Render(writer)
+		e.Render(scope, writer)
 		if !e.IsBlock() {
 			if OUTPUT_ASSEMBLY {
 				writer.Append("; // ")
@@ -666,11 +685,11 @@ type IfBlock struct {
 	body        []BlockElement
 }
 
-func (ib *IfBlock) Render(writer CodeWriter) {
+func (ib *IfBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Append("if ( ")
-	ib.conditional.Render(writer)
+	ib.conditional.Render(scope, writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
 		ib.conditional.RenderAssemblyOffsets(writer)
@@ -682,7 +701,7 @@ func (ib *IfBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(ib.body, writer)
+	RenderBlockElements(ib.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -711,7 +730,7 @@ type ElseBlock struct {
 	body []BlockElement
 }
 
-func (eb *ElseBlock) Render(writer CodeWriter) {
+func (eb *ElseBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Append("else")
@@ -734,7 +753,7 @@ func (eb *ElseBlock) Render(writer CodeWriter) {
 
 	if inline {
 		writer.Append(" ")
-		RenderBlockElements(eb.body, writer)
+		RenderBlockElements(eb.body, scope, writer)
 	} else {
 
 		writer.Append("\n")
@@ -742,7 +761,7 @@ func (eb *ElseBlock) Render(writer CodeWriter) {
 		writer.PushIndent()
 
 		// Write out the body
-		RenderBlockElements(eb.body, writer)
+		RenderBlockElements(eb.body, scope, writer)
 
 		writer.PopIndent()
 		writer.Append("}\n")
@@ -769,11 +788,11 @@ type DebugBlock struct {
 	body []BlockElement
 }
 
-func (db *DebugBlock) Render(writer CodeWriter) {
+func (db *DebugBlock) Render(scope *Scope, writer CodeWriter) {
 
 	if len(db.body) == 1 {
 		writer.Append("debug ")
-		RenderBlockElements(db.body, writer)
+		RenderBlockElements(db.body, scope, writer)
 	} else {
 		// Write out the top of the block
 		writer.Append("debug\n")
@@ -781,7 +800,7 @@ func (db *DebugBlock) Render(writer CodeWriter) {
 		writer.PushIndent()
 
 		// Write out the body
-		RenderBlockElements(db.body, writer)
+		RenderBlockElements(db.body, scope, writer)
 
 		// Write out the bottom of the block
 		writer.PopIndent()
@@ -812,7 +831,7 @@ type AtomicBlock struct {
 	body []BlockElement
 }
 
-func (db *AtomicBlock) Render(writer CodeWriter) {
+func (db *AtomicBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Append("atomic\n")
@@ -820,7 +839,7 @@ func (db *AtomicBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(db.body, writer)
+	RenderBlockElements(db.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -847,7 +866,7 @@ type ScheduleBlock struct {
 	body []BlockElement
 }
 
-func (db *ScheduleBlock) Render(writer CodeWriter) {
+func (db *ScheduleBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Append("schedule\n")
@@ -855,7 +874,7 @@ func (db *ScheduleBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(db.body, writer)
+	RenderBlockElements(db.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -883,7 +902,7 @@ type ScheduleEveryBlock struct {
 	body     []BlockElement
 }
 
-func (eb *ScheduleEveryBlock) Render(writer CodeWriter) {
+func (eb *ScheduleEveryBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Appendf("every %s:\n", RenderFloat(eb.interval))
@@ -891,7 +910,7 @@ func (eb *ScheduleEveryBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(eb.body, writer)
+	RenderBlockElements(eb.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -919,10 +938,10 @@ type WhileLoop struct {
 	body        []BlockElement
 }
 
-func (wl *WhileLoop) Render(writer CodeWriter) {
+func (wl *WhileLoop) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("while ( ")
-	wl.conditional.Render(writer)
+	wl.conditional.Render(scope, writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
 		wl.conditional.RenderAssemblyOffsets(writer)
@@ -934,7 +953,7 @@ func (wl *WhileLoop) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(wl.body, writer)
+	RenderBlockElements(wl.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -964,7 +983,7 @@ type DoWhileLoop struct {
 	body        []BlockElement
 }
 
-func (wl *DoWhileLoop) Render(writer CodeWriter) {
+func (wl *DoWhileLoop) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 
 	writer.Append("do\n")
@@ -972,13 +991,13 @@ func (wl *DoWhileLoop) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(wl.body, writer)
+	RenderBlockElements(wl.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
 	writer.Append("}\n")
 	writer.Append("while ( ")
-	wl.conditional.Render(writer)
+	wl.conditional.Render(scope, writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ); // ")
 		wl.conditional.RenderAssemblyOffsets(writer)
@@ -1013,7 +1032,7 @@ type ForLoop struct {
 	body        []BlockElement
 }
 
-func (fl *ForLoop) renderIncrement(writer CodeWriter) {
+func (fl *ForLoop) renderIncrement(scope *Scope, writer CodeWriter) {
 	// Since they don't have an opcode for ++, try to detect it here at least
 	assignment := fl.increment.graph.children[0]
 	incrementVariable := ""
@@ -1030,9 +1049,9 @@ func (fl *ForLoop) renderIncrement(writer CodeWriter) {
 						value := GetLiteralIntegerValue(add.children[1].operation)
 						switch value {
 						case 1:
-							incrementVariable = *add.children[0].code
+							incrementVariable = scope.variables[varReadData.index].variableName
 						case -1:
-							decrementVariable = *add.children[0].code
+							decrementVariable = scope.variables[varReadData.index].variableName
 						}
 					}
 				}
@@ -1045,18 +1064,18 @@ func (fl *ForLoop) renderIncrement(writer CodeWriter) {
 	} else if len(decrementVariable) > 0 {
 		writer.Appendf("--%s", decrementVariable)
 	} else {
-		fl.increment.Render(writer)
+		fl.increment.Render(scope, writer)
 	}
 }
 
-func (fl *ForLoop) Render(writer CodeWriter) {
+func (fl *ForLoop) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("for ( ")
-	fl.init.Render(writer)
+	fl.init.Render(scope, writer)
 	writer.Append("; ")
-	fl.conditional.Render(writer)
+	fl.conditional.Render(scope, writer)
 	writer.Append("; ")
-	fl.renderIncrement(writer)
+	fl.renderIncrement(scope, writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
 		fl.init.RenderAssemblyOffsets(writer)
@@ -1072,7 +1091,7 @@ func (fl *ForLoop) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(fl.body, writer)
+	RenderBlockElements(fl.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -1106,11 +1125,11 @@ type SwitchBlock struct {
 	body        []BlockElement
 }
 
-func (sb *SwitchBlock) Render(writer CodeWriter) {
+func (sb *SwitchBlock) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("switch ( ")
 	if sb.conditional != nil {
-		sb.conditional.Render(writer)
+		sb.conditional.Render(scope, writer)
 	}
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
@@ -1125,7 +1144,7 @@ func (sb *SwitchBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(sb.body, writer)
+	RenderBlockElements(sb.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -1177,7 +1196,7 @@ type CaseBlock struct {
 	body           []BlockElement
 }
 
-func (cb *CaseBlock) Render(writer CodeWriter) {
+func (cb *CaseBlock) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 	if cb.value != nil {
 		if cb.valueCode != nil {
@@ -1198,7 +1217,7 @@ func (cb *CaseBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(cb.body, writer)
+	RenderBlockElements(cb.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()

@@ -460,6 +460,13 @@ func checkAllCode() {
 	}
 }
 
+func resolveAllNames() {
+	// First reset all the possible types
+	for _, fnc := range DECOMPILED_FUNCS {
+		fnc.ResolveAllNames()
+	}
+}
+
 func createWriter() (CodeWriter, error) {
 	fmt.Printf("Writing pog: %s\n", OUTPUT_FILE)
 
@@ -581,6 +588,8 @@ func main() {
 	SetAllUnknownFunctionReturnTypesToVoid()
 
 	checkAllCode()
+
+	resolveAllNames()
 
 	// We need to detect the dependencies so we can reorder imports accordingly
 	DetectPackageDependencies()

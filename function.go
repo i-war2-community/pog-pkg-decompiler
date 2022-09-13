@@ -103,6 +103,13 @@ func (fd *FunctionDefinition) ResolveDeclarationTypes() int {
 	return resolvedCount
 }
 
+func (fd *FunctionDefinition) ResolveAllNames() {
+	for idx := range fd.scope.variables {
+		v := fd.scope.variables[idx]
+		v.ResolveName()
+	}
+}
+
 func (fd *FunctionDefinition) RenderPrototype(writer CodeWriter) {
 	// Write the function prototype
 	writer.Appendf("%s ", PROTOTYPE_PREFIX)
@@ -171,14 +178,14 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	fd.body = fd.body[len(assignments):]
 
-	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, fd.declaration, writer)
+	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, fd, writer)
 
 	if DEBUG_LOGGING {
 		writer.Appendf(`debug atomic Debug.PrintString("Inside function: %s %s\n");`, EXPORTING_PACKAGE, renderFunctionDefinitionHeader(fd.declaration))
 		writer.Append("\n")
 	}
 
-	RenderBlockElements(fd.body, writer)
+	RenderBlockElements(fd.body, fd.scope, writer)
 
 	writer.PopIndent()
 	writer.Append("}\n\n")
@@ -322,7 +329,7 @@ func (f *FunctionDeclaration) GetScopedName() string {
 	}
 }
 
-func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint32]*Statement, declaration *FunctionDeclaration, writer CodeWriter) {
+func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint32]*Statement, definition *FunctionDefinition, writer CodeWriter) {
 	written := 0
 	for ii := 0; ii < len(variables); ii++ {
 		lv := variables[ii]
@@ -336,12 +343,12 @@ func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint3
 		}
 
 		if lv.typeName == UNKNOWN_TYPE {
-			fmt.Printf("ERROR: Failed to determine type for local variable %s id %d in function %s\n", lv.variableName, lv.id, declaration.GetScopedName())
+			fmt.Printf("ERROR: Failed to determine type for local variable %s id %d in function %s\n", lv.variableName, lv.id, definition.declaration.GetScopedName())
 		}
 
 		if assignment, ok := assignments[lv.stackIndex]; ok {
 			writer.Appendf("%s ", lv.typeName)
-			assignment.Render(writer)
+			assignment.Render(definition.scope, writer)
 			writer.Append(";")
 		} else {
 			writer.Appendf("%s %s;", lv.typeName, lv.variableName)

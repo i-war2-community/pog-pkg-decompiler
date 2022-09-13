@@ -43,6 +43,7 @@ type Variable struct {
 	hasInit         bool
 	assignedTypes   map[string]bool
 	referencedTypes map[string]bool
+	potentialNames  []NameProvider
 	refCount        int
 	id              int
 }
@@ -229,6 +230,13 @@ func (v *Variable) ResolveType() bool {
 	}
 
 	return false
+}
+
+func (v *Variable) ResolveName() {
+	resolved := ResolveToName(v.potentialNames)
+	if len(resolved) > 0 {
+		v.variableName = resolved
+	}
 }
 
 type EnumTypeInfo struct {

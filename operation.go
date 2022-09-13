@@ -23,12 +23,38 @@ func (op *Operation) WriteAssembly(writer CodeWriter) {
 	}
 }
 
-func IsFunctionCall(operation *Operation) bool {
+func (op *Operation) GetVariable(scope *Scope) *Variable {
+	var index uint32 = 0xFFFFFFFF
+
+	switch op.opcode {
+	case OP_VARIABLE_READ:
+		index = op.data.(VariableReadData).index
+
+	case OP_VARIABLE_WRITE:
+		index = op.data.(VariableWriteData).index
+	}
+
+	if index < uint32(len(scope.variables)) {
+		return scope.variables[index]
+	}
+
+	return nil
+}
+
+func (operation *Operation) IsFunctionCall() bool {
 	switch operation.opcode {
 	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_IMPORTED, OP_TASK_CALL_LOCAL:
 		return true
 	}
 	return false
+}
+
+func (operation *Operation) GetFunctionDeclaration() *FunctionDeclaration {
+	switch operation.opcode {
+	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_IMPORTED, OP_TASK_CALL_LOCAL:
+		return operation.data.(FunctionCallData).declaration
+	}
+	return nil
 }
 
 func IsLiteralInteger(operation *Operation) bool {
