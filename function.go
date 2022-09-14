@@ -145,6 +145,22 @@ func (fd *FunctionDefinition) isLocalVariableInitialAssignment(statement *Statem
 	return nil
 }
 
+func (fd *FunctionDefinition) getLatestVariableWriteIndexBeforeOffset(offset uint32) int {
+	endIdx := offsetToOpIndex(offset, OPERATIONS[fd.startingIndex:])
+	if endIdx == -1 {
+		return -1
+	}
+	latestVariableIndex := -1
+	for idx := fd.startingIndex; idx < endIdx+fd.startingIndex; idx++ {
+		switch OPERATIONS[idx].opcode {
+		case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+			varData := OPERATIONS[idx].data.(VariableWriteData)
+			latestVariableIndex = int(varData.index)
+		}
+	}
+	return latestVariableIndex
+}
+
 func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	if OUTPUT_ASSEMBLY {
@@ -165,7 +181,9 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 		if !be.IsBlock() {
 			statement := be.(*Statement)
 			variable := fd.isLocalVariableInitialAssignment(statement)
-			if variable != nil && int(variable.stackIndex) > endIdx {
+			statementOffset, _ := statement.graph.GetOffsetRange()
+			lastVariableWritten := fd.getLatestVariableWriteIndexBeforeOffset(statementOffset)
+			if variable != nil && int(variable.stackIndex) > endIdx && int(variable.stackIndex) >= lastVariableWritten {
 				assignments[variable.stackIndex] = statement
 				endIdx = int(variable.stackIndex)
 			} else {
@@ -214,6 +232,15 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
+}
+
+var LOCAL_FUNCTION_ID_COUNTER int = 0
+
+func NewLocalFunctionAtOffset(offset uint32) *FunctionDeclaration {
+	declaration := AddFunctionDeclaration("", fmt.Sprintf("local_function_%d", LOCAL_FUNCTION_ID_COUNTER))
+	LOCAL_FUNCTION_ID_COUNTER++
+	FUNC_DEFINITION_MAP[offset] = declaration
+	return declaration
 }
 
 func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration {
@@ -311,12 +338,22 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 	return result
 }
 
-func SetAllUnknownFunctionReturnTypesToVoid() {
-	for idx := range FUNC_DECLARATIONS {
-		f := FUNC_DECLARATIONS[idx]
-
-		if f.returnInfo.typeName == UNKNOWN_TYPE {
-			f.returnInfo.typeName = ""
+func ResolveAllUnknownFunctionReturnTypes() {
+	for _, fnc := range DECOMPILED_FUNCS {
+		if fnc.declaration.returnInfo.typeName == UNKNOWN_TYPE {
+			for idx := fnc.endingIndex; idx < len(OPERATIONS); idx++ {
+				// Go until we find the actual function end opcode
+				if OPERATIONS[idx].opcode == OP_FUNCTION_END {
+					// Detect if the return type should be void or a task
+					if OPERATIONS[idx-1].opcode == OP_LITERAL_ZERO ||
+						(OPERATIONS[idx-1].opcode == OP_UNKNOWN_3C && OPERATIONS[idx-2].opcode == OP_LITERAL_ZERO) {
+						fnc.declaration.returnInfo.typeName = ""
+					} else {
+						fnc.declaration.returnInfo.typeName = "task"
+					}
+					break
+				}
+			}
 		}
 	}
 }
@@ -413,7 +450,8 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	var localVariableCount uint32 = 0
 
 	firstOp := OPERATIONS[startingIndex]
-	if firstOp.opcode == OP_PUSH_STACK_N {
+	secondOp := OPERATIONS[startingIndex+1]
+	if firstOp.opcode == OP_PUSH_STACK_N && secondOp.opcode != OP_SCHEDULE_START {
 		localVariableCount = firstOp.data.(CountDataUInt32).count
 	}
 

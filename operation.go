@@ -156,10 +156,10 @@ func RenderOperationCode(operation *Operation, scope *Scope) *string {
 		data := operation.data.(FunctionCallData)
 		result = fmt.Sprintf("start %s", data.declaration.GetScopedName())
 
-	case OP_INT_EQUALS, OP_STRING_EQUALS:
+	case OP_EQUALS, OP_STRING_EQUALS:
 		result = "=="
 
-	case OP_INT_NOT_EQUALS:
+	case OP_NOT_EQUALS:
 		result = "!="
 
 	case OP_INT_GT, OP_FLT_GT:

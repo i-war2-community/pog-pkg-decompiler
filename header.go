@@ -31,12 +31,13 @@ type ManualDependencyActions struct {
 // HACK: We can't completely rely on the 'uses' statements in the headers because they sometimes leave out
 // some dependencies. I will hard code the missing ones here for now so we don't have to modify the headers.
 var MANUAL_DEPENDENCIES = map[string]ManualDependencyActions{
-	"iDockport": {add: []string{"iSim"}},
-	"iLoadout":  {add: []string{"GUI"}},
-	"Sim":       {remove: []string{"Subsim"}},
-	"Subsim":    {add: []string{"Sim"}},
-	"Object":    {add: []string{"List"}},
-	"iScore":    {add: []string{"iShip"}},
+	"iDockport":    {add: []string{"iSim"}},
+	"iLoadout":     {add: []string{"GUI"}},
+	"Sim":          {remove: []string{"Subsim"}},
+	"Subsim":       {add: []string{"Sim"}},
+	"Object":       {add: []string{"List"}},
+	"iScore":       {add: []string{"iShip"}},
+	"iCargoScript": {add: []string{"iHabitat"}},
 }
 
 var PACKAGES = map[string]*PackageInfo{}
