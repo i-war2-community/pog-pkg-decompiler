@@ -31,7 +31,8 @@ func (bc *BlockContext) IsCurrentBlockIfBlock() bool {
 type BlockElement interface {
 	Render(writer CodeWriter)
 	IsBlock() bool
-	RendersAsBlock() bool
+	SpaceAbove() bool
+	SpaceBelow() bool
 	ResolveTypes(scope *Scope)
 	CheckCode(scope *Scope)
 }
@@ -184,6 +185,13 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	case OP_LITERAL_ONE, OP_LITERAL_ZERO:
 		og.typeName = "bool"
 
+	case OP_CAST_TO_BOOL:
+		if IsHandleType(og.children[0].typeName) {
+			og.typeName = "hobject"
+		} else {
+			og.typeName = "bool"
+		}
+
 	case OP_INT_ADD, OP_INT_SUB, OP_INT_MUL, OP_INT_DIV, OP_INT_MOD:
 		og.typeName = "int"
 		og.children[0].SetPossibleType(scope, "int")
@@ -320,32 +328,47 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1IsHandle := IsHandleType(child1.typeName)
 		child2IsHandle := IsHandleType(child2.typeName)
 
+		child1IsEnum := IsEnumType(child1.typeName)
+		child2IsEnum := IsEnumType(child2.typeName)
+
 		child1IsCast := child1.operation.opcode == OP_CAST_TO_BOOL
 		child2IsCast := child2.operation.opcode == OP_CAST_TO_BOOL
 
+		if child1IsEnum && !child2IsCast && IsLiteralInteger(child2.operation) {
+			child2.SetPossibleType(scope, child1.typeName)
+		}
+
+		if child2IsEnum && !child1IsCast && IsLiteralInteger(child1.operation) {
+			child1.SetPossibleType(scope, child2.typeName)
+		}
+
 		// We need to do a special check here to see if we are comparing a handle to "none", which gets compiled down to a zero
-		if child1IsCast || child1IsHandle {
-			if child2.operation.opcode == OP_LITERAL_ZERO {
+		if child2.operation.opcode == OP_LITERAL_ZERO {
+			if !child1IsCast && child1IsHandle {
 				child2.code = &noneCode
+			} else if child1IsCast {
+				child2.code = &falseCode
 			}
 		}
 
-		if child2IsCast || child2IsHandle {
-			if child1.operation.opcode == OP_LITERAL_ZERO {
+		if child1.operation.opcode == OP_LITERAL_ZERO {
+			if !child2IsCast && child2IsHandle {
 				child1.code = &noneCode
+			} else if child2IsCast {
+				child1.code = &falseCode
 			}
 		}
 
 		if child1IsHandle {
 			if child2IsCast {
-				child2.children[0].SetPossibleType(scope, "hobject")
+				child2.children[0].SetPossibleType(scope, child1.typeName)
 			} else {
 				child2.SetPossibleType(scope, child1.typeName)
 			}
 		}
 		if child2IsHandle {
-			if child2IsCast {
-				child1.children[0].SetPossibleType(scope, "hobject")
+			if child1IsCast {
+				child1.children[0].SetPossibleType(scope, child2.typeName)
 			} else {
 				child1.SetPossibleType(scope, child2.typeName)
 			}
@@ -361,6 +384,8 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 
 	case OP_STRING_EQUALS:
 		og.typeName = "bool"
+		og.children[0].SetPossibleType(scope, "string")
+		og.children[1].SetPossibleType(scope, "string")
 
 	case OP_VARIABLE_READ:
 		varData := og.operation.data.(VariableReadData)
@@ -497,20 +522,28 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 		child1 := og.children[0]
 		child2 := og.children[1]
 
-		child1IsHandle := IsHandleType(child1.typeName)
-		child2IsHandle := IsHandleType(child2.typeName)
+		child1Type := child1.typeName
+		child2Type := child2.typeName
 
-		child1IsCast := child1.operation.opcode == OP_CAST_TO_BOOL
-		child2IsCast := child2.operation.opcode == OP_CAST_TO_BOOL
+		if child1.operation.opcode == OP_CAST_TO_BOOL {
+			child1Type = child1.children[0].typeName
+		}
 
-		if !child1IsCast && !child2IsCast && child1IsHandle && child2IsHandle && child1.typeName != child2.typeName {
+		if child2.operation.opcode == OP_CAST_TO_BOOL {
+			child2Type = child2.children[0].typeName
+		}
+
+		child1IsHandle := IsHandleType(child1Type)
+		child2IsHandle := IsHandleType(child2Type)
+
+		if child1IsHandle && child2IsHandle && child1Type != child2Type {
 			cw := NewCodeWriter(os.Stdout)
-			cw.Appendf("ERROR: Mismatched handle types in equivalence check. This will cause both handles to be cast to bools and then compared:\n")
+			cw.Appendf("ERROR: Mismatched handle types in equivalence check at offset 0x%08X. This will cause both handles to be cast to bools and then compared:\n", og.operation.offset)
 			cw.PushIndent()
 			og.Render(cw, false)
 			cw.Append("\n")
-			cw.Appendf("L Type: %s\n", child1.typeName)
-			cw.Appendf("R Type: %s\n", child2.typeName)
+			cw.Appendf("L Type: %s\n", child1Type)
+			cw.Appendf("R Type: %s\n", child2Type)
 			cw.PopIndent()
 			cw.Append("\n")
 		}
@@ -625,7 +658,11 @@ func (s *Statement) IsBlock() bool {
 	return false
 }
 
-func (s *Statement) RendersAsBlock() bool {
+func (s *Statement) SpaceAbove() bool {
+	return false
+}
+
+func (s *Statement) SpaceBelow() bool {
 	return false
 }
 
@@ -638,16 +675,17 @@ func (s *Statement) CheckCode(scope *Scope) {
 }
 
 func shouldHaveNewlineBetween(element1 BlockElement, element2 BlockElement) bool {
-	if element1.RendersAsBlock() && element2.RendersAsBlock() {
+	if element1.SpaceBelow() || element2.SpaceAbove() {
 		_, isIf := element1.(*IfBlock)
 		_, isElse := element2.(*ElseBlock)
 		return !(isIf && isElse)
 	}
-	if !element1.RendersAsBlock() && !element2.RendersAsBlock() {
-		return false
-	}
+	// if !element1.RendersAsBlock() && !element2.RendersAsBlock() {
+	// 	return false
+	// }
 
-	return true
+	// return true
+	return false
 }
 
 func RenderBlockElements(elements []BlockElement, writer CodeWriter) {
@@ -702,7 +740,11 @@ func (ib *IfBlock) IsBlock() bool {
 	return true
 }
 
-func (ib *IfBlock) RendersAsBlock() bool {
+func (ib *IfBlock) SpaceAbove() bool {
+	return true
+}
+
+func (ib *IfBlock) SpaceBelow() bool {
 	return true
 }
 
@@ -762,7 +804,11 @@ func (eb *ElseBlock) IsBlock() bool {
 	return true
 }
 
-func (eb *ElseBlock) RendersAsBlock() bool {
+func (eb *ElseBlock) SpaceAbove() bool {
+	return true
+}
+
+func (eb *ElseBlock) SpaceBelow() bool {
 	return true
 }
 
@@ -780,7 +826,20 @@ type DebugBlock struct {
 
 func (db *DebugBlock) Render(writer CodeWriter) {
 
+	inline := false
+
 	if len(db.body) == 1 {
+		switch db.body[0].(type) {
+		case *AtomicBlock:
+			inline = true
+		}
+
+		if !db.body[0].IsBlock() {
+			inline = true
+		}
+	}
+
+	if inline {
 		writer.Append("debug ")
 		RenderBlockElements(db.body, writer)
 	} else {
@@ -802,9 +861,16 @@ func (db *DebugBlock) IsBlock() bool {
 	return true
 }
 
-func (db *DebugBlock) RendersAsBlock() bool {
+func (db *DebugBlock) SpaceAbove() bool {
 	if len(db.body) == 1 {
-		return db.body[0].RendersAsBlock()
+		return db.body[0].SpaceAbove()
+	}
+	return true
+}
+
+func (db *DebugBlock) SpaceBelow() bool {
+	if len(db.body) == 1 {
+		return db.body[0].SpaceBelow()
 	}
 	return true
 }
@@ -840,7 +906,11 @@ func (db *AtomicBlock) IsBlock() bool {
 	return true
 }
 
-func (db *AtomicBlock) RendersAsBlock() bool {
+func (db *AtomicBlock) SpaceAbove() bool {
+	return true
+}
+
+func (db *AtomicBlock) SpaceBelow() bool {
 	return true
 }
 
@@ -875,7 +945,11 @@ func (db *ScheduleBlock) IsBlock() bool {
 	return true
 }
 
-func (db *ScheduleBlock) RendersAsBlock() bool {
+func (db *ScheduleBlock) SpaceAbove() bool {
+	return true
+}
+
+func (db *ScheduleBlock) SpaceBelow() bool {
 	return true
 }
 
@@ -911,7 +985,11 @@ func (db *ScheduleEveryBlock) IsBlock() bool {
 	return true
 }
 
-func (db *ScheduleEveryBlock) RendersAsBlock() bool {
+func (db *ScheduleEveryBlock) SpaceAbove() bool {
+	return true
+}
+
+func (db *ScheduleEveryBlock) SpaceBelow() bool {
 	return true
 }
 
@@ -954,7 +1032,11 @@ func (wl *WhileLoop) IsBlock() bool {
 	return true
 }
 
-func (wl *WhileLoop) RendersAsBlock() bool {
+func (wl *WhileLoop) SpaceAbove() bool {
+	return true
+}
+
+func (wl *WhileLoop) SpaceBelow() bool {
 	return true
 }
 
@@ -1001,7 +1083,11 @@ func (wl *DoWhileLoop) IsBlock() bool {
 	return true
 }
 
-func (wl *DoWhileLoop) RendersAsBlock() bool {
+func (wl *DoWhileLoop) SpaceAbove() bool {
+	return true
+}
+
+func (wl *DoWhileLoop) SpaceBelow() bool {
 	return true
 }
 
@@ -1092,7 +1178,11 @@ func (fl *ForLoop) IsBlock() bool {
 	return true
 }
 
-func (fl *ForLoop) RendersAsBlock() bool {
+func (fl *ForLoop) SpaceAbove() bool {
+	return true
+}
+
+func (fl *ForLoop) SpaceBelow() bool {
 	return true
 }
 
@@ -1145,7 +1235,11 @@ func (sb *SwitchBlock) IsBlock() bool {
 	return true
 }
 
-func (sb *SwitchBlock) RendersAsBlock() bool {
+func (sb *SwitchBlock) SpaceAbove() bool {
+	return true
+}
+
+func (sb *SwitchBlock) SpaceBelow() bool {
 	return true
 }
 
@@ -1218,8 +1312,12 @@ func (cb *CaseBlock) IsBlock() bool {
 	return true
 }
 
-func (cb *CaseBlock) RendersAsBlock() bool {
-	return true
+func (cb *CaseBlock) SpaceAbove() bool {
+	return false
+}
+
+func (cb *CaseBlock) SpaceBelow() bool {
+	return len(cb.body) > 0
 }
 
 func (cb *CaseBlock) ResolveTypes(scope *Scope) {
@@ -1366,13 +1464,13 @@ func isScheduleBlock(idx int, ops []Operation) int {
 	return -1
 }
 
-func isAtomicBlock(idx int, ops []Operation) int {
+func isAtomicBlock(idx int, maxOpIdx int, ops []Operation) int {
 	lastAtomicStop := -1
 	op := &ops[idx]
 	if op.opcode == OP_ATOMIC_START {
 		atomicCounter := 1
 
-		for ii := idx + 1; ii < len(ops); ii++ {
+		for ii := idx + 1; ii <= maxOpIdx; ii++ {
 			op = &ops[ii]
 			switch op.opcode {
 			case OP_ATOMIC_START:
@@ -1773,7 +1871,7 @@ func ParseOperations(scope *Scope, context *BlockContext, ops []Operation, minOp
 		}
 
 		// Check for atomic block
-		blockEnd = isAtomicBlock(idx, ops)
+		blockEnd = isAtomicBlock(idx, maxOpIdx, ops)
 		if blockEnd != -1 {
 
 			child := &AtomicBlock{}

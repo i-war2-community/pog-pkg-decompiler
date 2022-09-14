@@ -138,6 +138,22 @@ func (fd *FunctionDefinition) isLocalVariableInitialAssignment(statement *Statem
 	return nil
 }
 
+func (fd *FunctionDefinition) getLatestVariableWriteIndexBeforeOffset(offset uint32) int {
+	endIdx := offsetToOpIndex(offset, OPERATIONS[fd.startingIndex:])
+	if endIdx == -1 {
+		return -1
+	}
+	latestVariableIndex := -1
+	for idx := fd.startingIndex; idx < endIdx+fd.startingIndex; idx++ {
+		switch OPERATIONS[idx].opcode {
+		case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+			varData := OPERATIONS[idx].data.(VariableWriteData)
+			latestVariableIndex = int(varData.index)
+		}
+	}
+	return latestVariableIndex
+}
+
 func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	if OUTPUT_ASSEMBLY {
@@ -158,7 +174,9 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 		if !be.IsBlock() {
 			statement := be.(*Statement)
 			variable := fd.isLocalVariableInitialAssignment(statement)
-			if variable != nil && int(variable.stackIndex) > endIdx {
+			statementOffset, _ := statement.graph.GetOffsetRange()
+			lastVariableWritten := fd.getLatestVariableWriteIndexBeforeOffset(statementOffset)
+			if variable != nil && int(variable.stackIndex) > endIdx && int(variable.stackIndex) >= lastVariableWritten {
 				assignments[variable.stackIndex] = statement
 				endIdx = int(variable.stackIndex)
 			} else {
