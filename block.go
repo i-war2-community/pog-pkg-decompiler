@@ -80,6 +80,11 @@ func (og *OpGraph) SetPossibleType(scope *Scope, typeName string) {
 		varData := og.operation.data.(VariableReadData)
 		scope.variables[varData.index].AddReferencedType(typeName)
 
+		// The result of an assignment can be passed through to a function, etc
+	case OP_VARIABLE_WRITE:
+		varData := og.operation.data.(VariableWriteData)
+		scope.variables[varData.index].AddReferencedType(typeName)
+
 	case OP_LITERAL_ZERO, OP_LITERAL_ONE, OP_LITERAL_BYTE, OP_LITERAL_SHORT, OP_LITERAL_INT:
 		if IsEnumType(typeName) {
 			numberData := og.operation.data.(LiteralInteger)
@@ -224,6 +229,10 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 					} else {
 						// TODO: Freak out
 					}
+				} else if IsHandleType(child.typeName) {
+					commonType = child.typeName
+				} else if IsHandleType(param.typeName) {
+					commonType = param.typeName
 				} else {
 					if child.typeName == param.typeName {
 						commonType = child.typeName
@@ -302,14 +311,11 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		child1.SetPossibleType(scope, "int")
 		child2.SetPossibleType(scope, "int")
 
-	case OP_INT_EQUALS, OP_INT_NOT_EQUALS:
+	case OP_EQUALS, OP_NOT_EQUALS:
 		og.typeName = "bool"
 
 		child1 := og.children[0]
 		child2 := og.children[1]
-
-		child1.SetPossibleType(scope, "int")
-		child2.SetPossibleType(scope, "int")
 
 		child1IsHandle := IsHandleType(child1.typeName)
 		child2IsHandle := IsHandleType(child2.typeName)
@@ -384,6 +390,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			if IsHandleType(v.typeName) {
 				og.children[0].code = &noneCode
 				break
+			} else if v.typeName == "int" {
+				zeroCode := "0"
+				og.children[0].code = &zeroCode
 			}
 			fallthrough
 		case OP_LITERAL_ONE:
@@ -484,7 +493,7 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 	}
 
 	switch og.operation.opcode {
-	case OP_INT_EQUALS, OP_INT_NOT_EQUALS:
+	case OP_EQUALS, OP_NOT_EQUALS:
 		child1 := og.children[0]
 		child2 := og.children[1]
 
@@ -1143,6 +1152,7 @@ func (sb *SwitchBlock) RendersAsBlock() bool {
 func (sb *SwitchBlock) ResolveTypes(scope *Scope) {
 	if sb.conditional != nil {
 		sb.conditional.ResolveTypes(scope)
+		sb.conditional.graph.children[0].SetPossibleType(scope, "int")
 
 		if IsEnumType(sb.conditional.graph.typeName) {
 			// Get the enum data
@@ -1513,7 +1523,7 @@ func isSwitchBlock(scope *Scope, context *BlockContext, idx int, ops []Operation
 					oper2 := ops[idx+1]
 					oper3 := ops[idx+2]
 
-					if !IsLiteralInteger(&oper) || oper2.opcode != OP_INT_EQUALS || oper3.opcode != OP_JUMP_IF_TRUE {
+					if !IsLiteralInteger(&oper) || oper2.opcode != OP_EQUALS || oper3.opcode != OP_JUMP_IF_TRUE {
 						if len(cases) > 0 {
 							return parseSwitchBlock(scope, context, condStart, condEnd, idx, cases, ops), idx
 						}

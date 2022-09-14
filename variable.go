@@ -148,10 +148,16 @@ func getBestNonHandleType(types []string) string {
 	}
 
 	for _, t := range types {
-		hasBool = (t == "bool")
-		hasInt = (t == "int")
-		hasFloat = (t == "float")
-		hasString = (t == "string")
+		switch t {
+		case "bool":
+			hasBool = true
+		case "int":
+			hasInt = true
+		case "float":
+			hasFloat = true
+		case "string":
+			hasString = true
+		}
 	}
 
 	if hasString {

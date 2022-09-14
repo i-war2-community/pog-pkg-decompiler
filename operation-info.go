@@ -55,12 +55,12 @@ const (
 	OP_INT_MOD byte = 0x1E
 	OP_INT_NEG byte = 0x1F
 
-	OP_INT_EQUALS     byte = 0x20
-	OP_INT_NOT_EQUALS byte = 0x21
-	OP_INT_GT         byte = 0x22
-	OP_INT_LT         byte = 0x23
-	OP_INT_GT_EQUALS  byte = 0x24
-	OP_INT_LT_EQUALS  byte = 0x25
+	OP_EQUALS        byte = 0x20
+	OP_NOT_EQUALS    byte = 0x21
+	OP_INT_GT        byte = 0x22
+	OP_INT_LT        byte = 0x23
+	OP_INT_GT_EQUALS byte = 0x24
+	OP_INT_LT_EQUALS byte = 0x25
 
 	OP_FLT_ADD byte = 0x26
 	OP_FLT_SUB byte = 0x27
@@ -140,12 +140,12 @@ var OP_MAP = map[byte]OperationInfo{
 	OP_INT_MOD: {name: "OP_INT_MOD", dataSize: 0, parser: ParseOperator},
 	OP_INT_NEG: {name: "OP_INT_NEG", dataSize: 0, parser: ParseUnaryOperator},
 
-	OP_INT_EQUALS:     {name: "OP_INT_EQUALS", dataSize: 0, parser: ParseOperator},
-	OP_INT_NOT_EQUALS: {name: "OP_INT_NOT_EQUALS", dataSize: 0, parser: ParseOperator},
-	OP_INT_GT:         {name: "OP_INT_GT", dataSize: 0, parser: ParseOperator},
-	OP_INT_LT:         {name: "OP_INT_LT", dataSize: 0, parser: ParseOperator},
-	OP_INT_GT_EQUALS:  {name: "OP_INT_GT_EQUALS", dataSize: 0, parser: ParseOperator},
-	OP_INT_LT_EQUALS:  {name: "OP_INT_LT_EQUALS", dataSize: 0, parser: ParseOperator},
+	OP_EQUALS:        {name: "OP_EQUALS", dataSize: 0, parser: ParseOperator},
+	OP_NOT_EQUALS:    {name: "OP_NOT_EQUALS", dataSize: 0, parser: ParseOperator},
+	OP_INT_GT:        {name: "OP_INT_GT", dataSize: 0, parser: ParseOperator},
+	OP_INT_LT:        {name: "OP_INT_LT", dataSize: 0, parser: ParseOperator},
+	OP_INT_GT_EQUALS: {name: "OP_INT_GT_EQUALS", dataSize: 0, parser: ParseOperator},
+	OP_INT_LT_EQUALS: {name: "OP_INT_LT_EQUALS", dataSize: 0, parser: ParseOperator},
 
 	OP_FLT_ADD: {name: "OP_FLT_ADD", dataSize: 0, parser: ParseOperator},
 	OP_FLT_SUB: {name: "OP_FLT_SUB", dataSize: 0, parser: ParseOperator},
@@ -570,28 +570,17 @@ func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
 	declaration, ok := FUNC_DEFINITION_MAP[offset]
 
 	if !ok {
-		declaration = AddFunctionDeclaration("", fmt.Sprintf("local_function_%08X", offset))
-		FUNC_DEFINITION_MAP[offset] = declaration
+		declaration = NewLocalFunctionAtOffset(offset)
+	}
 
-		if declaration.parameters == nil {
-			params := make([]FunctionParameter, parameterCount)
-			for ii := 0; ii < len(params); ii++ {
-				p := &params[ii]
-				p.typeName = UNKNOWN_TYPE
-				p.parameterName = fmt.Sprintf("param_%d", ii)
-			}
-			declaration.parameters = &params
+	if declaration.parameters == nil {
+		params := make([]FunctionParameter, parameterCount)
+		for ii := 0; ii < len(params); ii++ {
+			p := &params[ii]
+			p.typeName = UNKNOWN_TYPE
+			p.parameterName = fmt.Sprintf("param_%d", ii)
 		}
-	} else {
-		if declaration.parameters == nil {
-			params := make([]FunctionParameter, parameterCount)
-			for ii := 0; ii < len(params); ii++ {
-				p := &params[ii]
-				p.typeName = UNKNOWN_TYPE
-				p.parameterName = fmt.Sprintf("param_%d", ii)
-			}
-			declaration.parameters = &params
-		}
+		declaration.parameters = &params
 	}
 
 	return FunctionCallData{
@@ -606,12 +595,12 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 	declaration, ok := FUNC_DEFINITION_MAP[offset]
 
 	if !ok {
-		declaration = AddFunctionDeclaration("", fmt.Sprintf("local_function_%08X", offset))
-		FUNC_DEFINITION_MAP[offset] = declaration
+		declaration = NewLocalFunctionAtOffset(offset)
 	}
 
+	declaration.returnInfo.typeName = "task"
+
 	if declaration.parameters == nil {
-		declaration.returnInfo.typeName = "task"
 		params := make([]FunctionParameter, parameterCount)
 		for ii := 0; ii < len(params); ii++ {
 			p := &params[ii]
@@ -644,6 +633,12 @@ func ParseFunctionCallImported(data []byte, codeOffset uint32) OperationData {
 	return FunctionCallData{
 		declaration: declaration,
 	}
+}
+
+func ParseTaskCallImported(data []byte, codeOffset uint32) OperationData {
+	result := ParseFunctionCallImported(data, codeOffset)
+	result.(FunctionCallData).declaration.returnInfo.typeName = "task"
+	return result
 }
 
 type StringInitData struct {

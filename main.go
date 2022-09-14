@@ -415,10 +415,15 @@ func readCodeSection(file *os.File) error {
 	}
 
 	for idx := 0; idx < len(OPERATIONS); idx++ {
-		operation := OPERATIONS[idx]
-		declaration := FUNC_DEFINITION_MAP[operation.offset]
+		if idx == 0 || OPERATIONS[idx-1].opcode == OP_FUNCTION_END {
+			operation := OPERATIONS[idx]
+			declaration := FUNC_DEFINITION_MAP[operation.offset]
 
-		if declaration != nil {
+			// See if we have an unreferenced function here
+			if declaration == nil {
+				declaration = NewLocalFunctionAtOffset(uint32(idx))
+			}
+
 			var def *FunctionDefinition
 			idx, def = DecompileFunction(declaration, idx, initialOffset)
 			DECOMPILED_FUNCS = append(DECOMPILED_FUNCS, def)
@@ -541,6 +546,9 @@ func main() {
 		OUTPUT_ASSEMBLY = true
 		for idx := 0; idx < len(OPERATIONS); idx++ {
 			operation := OPERATIONS[idx]
+			if operation.opcode == OP_UNKNOWN_3C {
+				continue
+			}
 			if ASSEMBLY_OFFSET_PREFIX {
 				writer.Appendf("// 0x%08X ", operation.offset)
 			} else {
@@ -578,7 +586,9 @@ func main() {
 	resolveAllTypes()
 
 	// Fix functions with unknown return types
-	SetAllUnknownFunctionReturnTypesToVoid()
+	ResolveAllUnknownFunctionReturnTypes()
+
+	resolveAllTypes()
 
 	checkAllCode()
 
