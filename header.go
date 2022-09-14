@@ -155,7 +155,7 @@ func removeComments(contents []byte) []byte {
 	return contents
 }
 
-func isValidIdentifier(name string) bool {
+func IsValidIdentifier(name string) bool {
 	if len(name) == 0 {
 		return false
 	}
@@ -177,6 +177,49 @@ func isValidIdentifier(name string) bool {
 	return true
 }
 
+func ConvertToIdentifier(name string) string {
+	if strings.HasPrefix(name, "ini:/") {
+		split := strings.Split(name, "/")
+		if len(split) > 0 {
+			return split[len(split)-1]
+		} else {
+			return ""
+		}
+	}
+	result := []byte{}
+	idx := 0
+	for ii := range name {
+		r := rune(name[ii])
+
+		if unicode.IsSpace(r) || r == '-' || r == '\'' {
+			continue
+		}
+		// We can't start with a number
+		if idx == 0 && unicode.IsNumber(r) {
+			result = append(result, '_')
+			idx++
+			continue
+		}
+
+		// We can only have letters, numbers, and underscores
+		if !unicode.IsNumber(r) &&
+			!unicode.IsLetter(r) &&
+			r != '_' {
+			result = append(result, '_')
+			idx++
+			continue
+		}
+
+		if idx == 0 {
+			result = append(result, byte(unicode.ToLower(r)))
+		} else {
+			result = append(result, name[ii])
+		}
+		idx++
+	}
+	return string(result)
+}
+
 func parsePackageHandles(contents []byte, pkg *PackageInfo) {
 	// Find all handle declarations
 	r, _ := regexp.Compile("(handle[^:]*:[^;]*;)")
@@ -189,7 +232,7 @@ func parsePackageHandles(contents []byte, pkg *PackageInfo) {
 		typeName := strings.TrimSpace(parts[0])
 		baseType := strings.TrimSpace(parts[1])
 
-		if !isValidIdentifier(typeName) || !isValidIdentifier(baseType) {
+		if !IsValidIdentifier(typeName) || !IsValidIdentifier(baseType) {
 			fmt.Printf("ERROR: Failed to parse package %s handle definition '%s', invalid identifier.\n", pkg.name, all[ii])
 			continue
 		}
@@ -221,7 +264,7 @@ func parsePackageDependencies(contents []byte, pkg *PackageInfo) {
 		deps := strings.Split(string(depList), ",")
 		for _, dep := range deps {
 			dep = strings.TrimSpace(dep)
-			if !isValidIdentifier(dep) {
+			if !IsValidIdentifier(dep) {
 				fmt.Printf("ERROR: Failed to parse package %s dependency list '%s', invalid identifier %s.\n", pkg.name, all[ii], dep)
 				continue
 			}
@@ -256,7 +299,7 @@ func parsePackageEnums(contents []byte, pkg *PackageInfo) {
 
 		enumName := strings.TrimSpace(parts[0])
 
-		if !isValidIdentifier(enumName) {
+		if !IsValidIdentifier(enumName) {
 			fmt.Printf("WARN: Invalid enum name %s in package %s header.\n", enumName, pkg.name)
 			continue
 		}
@@ -311,7 +354,7 @@ func parsePackageEnums(contents []byte, pkg *PackageInfo) {
 				break
 			}
 
-			if !isValidIdentifier(name) {
+			if !IsValidIdentifier(name) {
 				fmt.Printf("WARN: Invalid identifier for enum %s member %s.\n.", enumName, name)
 				hasError = true
 				break

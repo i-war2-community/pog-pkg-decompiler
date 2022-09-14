@@ -466,10 +466,16 @@ func checkAllCode() {
 }
 
 func resolveAllNames() {
-	// First reset all the possible types
+	totalVariables := 0
+	totalResolvedNames := 0
+
+	// Resolve the names for all of our functions
 	for _, fnc := range DECOMPILED_FUNCS {
-		fnc.ResolveAllNames()
+		totalVariables += len(fnc.scope.variables)
+		totalResolvedNames += fnc.ResolveAllNames()
 	}
+
+	fmt.Printf("Resolved %d / %d variable names.\n", totalResolvedNames, totalVariables)
 }
 
 func createWriter() (CodeWriter, error) {
@@ -585,7 +591,7 @@ func main() {
 				}
 			}
 			// Lock in our header types
-			fnc.declaration.autoDetectTypes = false
+			//fnc.declaration.autoDetectTypes = false
 		}
 	}
 

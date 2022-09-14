@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -20,6 +21,17 @@ type FunctionDeclaration struct {
 	parameters      *[]FunctionParameter
 	autoDetectTypes bool
 	returnInfo      *Variable
+}
+
+func (fd *FunctionDeclaration) FindParameter(regex *regexp.Regexp) (int, *FunctionParameter) {
+	for idx := range *fd.parameters {
+		p := &(*fd.parameters)[idx]
+		if regex.MatchString(p.parameterName) {
+			return idx, p
+		}
+	}
+
+	return -1, nil
 }
 
 func (fd *FunctionDeclaration) ResetPossibleTypes() {
@@ -103,11 +115,53 @@ func (fd *FunctionDefinition) ResolveDeclarationTypes() int {
 	return resolvedCount
 }
 
-func (fd *FunctionDefinition) ResolveAllNames() {
+func (fd *FunctionDefinition) ResolveAllNames() int {
+	totalResolved := 0
 	for idx := range fd.scope.variables {
 		v := fd.scope.variables[idx]
-		v.ResolveName()
+
+		// Add generic name providers here
+		if IsHandleType(v.typeName) {
+			v.AddNameProvider(&HandleTypeNameProvider{handleType: v.typeName})
+		}
+
+		if v.ResolveName() {
+			totalResolved++
+		}
 	}
+
+	nameCollisions := map[string][]*Variable{}
+
+	// Find name collisions
+	for _, v := range fd.scope.variables {
+		nameCollisions[v.variableName] = append(nameCollisions[v.variableName], v)
+	}
+
+	// Resolve name collisions
+	for _, vars := range nameCollisions {
+		if len(vars) > 1 {
+			for idx, v := range vars {
+				v.ResolveNamingConflict(idx)
+			}
+		}
+	}
+
+	// Copy over the variable names to our parameters if we are auto detecting the types for this function
+	if fd.declaration.autoDetectTypes {
+		for idx := range *fd.declaration.parameters {
+			p := &(*fd.declaration.parameters)[idx]
+			p.parameterName = p.variable.variableName
+		}
+	}
+
+	// Put underscores on the end of all function parameter names
+	for idx := range *fd.declaration.parameters {
+		p := &(*fd.declaration.parameters)[idx]
+		p.parameterName = fmt.Sprintf("%s_", p.parameterName)
+		p.variable.variableName = p.parameterName
+	}
+
+	return totalResolved
 }
 
 func (fd *FunctionDefinition) RenderPrototype(writer CodeWriter) {
@@ -131,7 +185,7 @@ func (fd *FunctionDefinition) isLocalVariableInitialAssignment(statement *Statem
 		op2 = op2.children[0]
 	}
 
-	if op1.operation.opcode == OP_POP_STACK && (op2.operation.opcode == OP_VARIABLE_WRITE || op2.operation.opcode == OP_HANDLE_VARIABLE_WRITE) {
+	if op1.operation.opcode == OP_POP_STACK && (op2.operation.opcode == OP_VARIABLE_WRITE || op2.operation.opcode == OP_STRING_VARIABLE_WRITE) {
 		varData := op2.operation.data.(VariableWriteData)
 		references := op2.children[0].GetAllReferencedVariableIndices()
 		for idx := varData.index; idx < uint32(len(fd.scope.variables)); idx++ {
@@ -153,7 +207,7 @@ func (fd *FunctionDefinition) getLatestVariableWriteIndexBeforeOffset(offset uin
 	latestVariableIndex := -1
 	for idx := fd.startingIndex; idx < endIdx+fd.startingIndex; idx++ {
 		switch OPERATIONS[idx].opcode {
-		case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+		case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 			varData := OPERATIONS[idx].data.(VariableWriteData)
 			latestVariableIndex = int(varData.index)
 		}
@@ -474,7 +528,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 					maxIndex = index
 				}
 
-			case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+			case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 				varData := op.data.(VariableWriteData)
 				index := int(varData.index)
 				if index > maxIndex {
@@ -616,7 +670,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 					return endIdx, definition
 				}
 
-			case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+			case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 				varData := op.data.(VariableWriteData)
 				if varData.index >= variableCount {
 					fmt.Printf("ERROR: Function %s tries to write to variable at index %d while only %d were declared, skipping.\n", declaration.GetScopedName(), varData.index, variableCount)

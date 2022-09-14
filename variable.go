@@ -44,6 +44,7 @@ type Variable struct {
 	assignedTypes   map[string]bool
 	referencedTypes map[string]bool
 	potentialNames  []NameProvider
+	nameProvider    NameProvider
 	refCount        int
 	id              int
 }
@@ -56,6 +57,13 @@ func (v *Variable) AddAssignedType(typeName string) {
 
 func (v *Variable) AddReferencedType(typeName string) {
 	v.referencedTypes[typeName] = true
+}
+
+func (v *Variable) AddNameProvider(provider NameProvider) {
+	v.potentialNames = append(v.potentialNames, provider)
+
+	// HACK
+	provider.GetName(v)
 }
 
 func (v *Variable) ResetPossibleTypes() {
@@ -238,10 +246,24 @@ func (v *Variable) ResolveType() bool {
 	return false
 }
 
-func (v *Variable) ResolveName() {
-	resolved := ResolveToName(v.potentialNames)
-	if len(resolved) > 0 {
-		v.variableName = resolved
+func (v *Variable) ResolveName() bool {
+	provider := GetHighestPriorityProvider(v, v.potentialNames)
+	if provider == nil {
+		return false
+	}
+	name := provider.GetName(v)
+	if len(name) > 0 {
+		v.nameProvider = provider
+		v.variableName = name
+		return true
+	}
+
+	return false
+}
+
+func (v *Variable) ResolveNamingConflict(index int) {
+	if v.nameProvider != nil {
+		v.variableName = v.nameProvider.ResolveConflict(v, index)
 	}
 }
 

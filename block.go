@@ -51,7 +51,7 @@ func (og *OpGraph) GetAllReferencedVariableIndices() map[uint32]bool {
 		varData := og.operation.data.(VariableReadData)
 		result[varData.index] = true
 
-	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		varData := og.operation.data.(VariableWriteData)
 		result[varData.index] = true
 	}
@@ -64,6 +64,21 @@ func (og *OpGraph) GetAllReferencedVariableIndices() map[uint32]bool {
 	}
 
 	return result
+}
+
+func (og *OpGraph) GetFunctionParameterChild(parameterIndex int) *OpGraph {
+	if !og.operation.IsFunctionCall() {
+		return nil
+	}
+	// Find the corresponding operation
+	if parameterIndex >= 0 {
+		opIndex := (len(og.children) - 1) - parameterIndex
+		if opIndex < len(og.children) {
+			return og.children[opIndex]
+		}
+	}
+
+	return nil
 }
 
 func (og *OpGraph) String() string {
@@ -135,7 +150,7 @@ func (og *OpGraph) GetVariableIndices() []uint32 {
 		data := og.operation.data.(VariableReadData)
 		result = append(result, data.index)
 
-	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		data := og.operation.data.(VariableWriteData)
 		result = append(result, data.index)
 	}
@@ -394,7 +409,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			og.typeName = scope.variables[varData.index].typeName
 		}
 
-	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		varData := og.operation.data.(VariableWriteData)
 		v := scope.variables[varData.index]
 		// Add to the variable's ref count if this isn't just from a handle init
@@ -547,19 +562,13 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 			cw.PopIndent()
 			cw.Append("\n")
 		}
-
-	case OP_VARIABLE_WRITE:
+	}
+	switch og.operation.opcode {
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		variable := og.operation.GetVariable(scope)
-
-		// Add a name provider that looks for calls to certan "Globals" functions
-		np := &GlobalNameProvider{
-			assignment: og.children[0],
-		}
-		variable.potentialNames = append(variable.potentialNames, np)
+		AddAssignmentBasedNamingProviders(variable, og.children[0])
 		fallthrough
-
 	case OP_VARIABLE_READ:
-		// Reset this so our computed name will get re-rendered
 		og.code = nil
 	}
 }
@@ -1127,11 +1136,10 @@ type ForLoop struct {
 	body        []BlockElement
 }
 
-func (fl *ForLoop) renderIncrement(scope *Scope, writer CodeWriter) {
-	// Since they don't have an opcode for ++, try to detect it here at least
+func (fl *ForLoop) getIterationVariable(scope *Scope) (*Variable, int32) {
 	assignment := fl.increment.graph.children[0]
-	incrementVariable := ""
-	decrementVariable := ""
+	var iteratorVariable *Variable = nil
+	var incrementMagnitude int32 = 0
 
 	if assignment.operation.opcode == OP_VARIABLE_WRITE {
 		varWriteData := assignment.operation.data.(VariableWriteData)
@@ -1141,23 +1149,34 @@ func (fl *ForLoop) renderIncrement(scope *Scope, writer CodeWriter) {
 				varReadData := add.children[0].operation.data.(VariableReadData)
 				if varReadData.index == varWriteData.index {
 					if IsLiteralInteger(add.children[1].operation) {
-						value := GetLiteralIntegerValue(add.children[1].operation)
-						switch value {
-						case 1:
-							incrementVariable = scope.variables[varReadData.index].variableName
-						case -1:
-							decrementVariable = scope.variables[varReadData.index].variableName
-						}
+						incrementMagnitude = GetLiteralIntegerValue(add.children[1].operation)
+						iteratorVariable = scope.variables[varReadData.index]
 					}
 				}
 			}
 		}
 	}
 
-	if len(incrementVariable) > 0 {
-		writer.Appendf("++%s", incrementVariable)
-	} else if len(decrementVariable) > 0 {
-		writer.Appendf("--%s", decrementVariable)
+	return iteratorVariable, incrementMagnitude
+}
+
+func (fl *ForLoop) renderIncrement(scope *Scope, writer CodeWriter) {
+	// Since they don't have an opcode for ++, try to detect it here at least
+	iterator, magnitude := fl.getIterationVariable(scope)
+
+	if iterator != nil {
+		switch magnitude {
+		case -1:
+			writer.Appendf("--%s", iterator.variableName)
+		case 1:
+			writer.Appendf("++%s", iterator.variableName)
+		default:
+			if magnitude > 0 {
+				writer.Appendf("%s += %d", iterator.variableName, magnitude)
+			} else {
+				writer.Appendf("%s -= %d", iterator.variableName, -magnitude)
+			}
+		}
 	} else {
 		fl.increment.Render(scope, writer)
 	}
@@ -1217,6 +1236,11 @@ func (fl *ForLoop) CheckCode(scope *Scope) {
 	fl.conditional.CheckCode(scope)
 	fl.increment.CheckCode(scope)
 	CheckCode(scope, fl.body)
+
+	iterator, _ := fl.getIterationVariable(scope)
+	if iterator != nil {
+		iterator.AddNameProvider(&IteratorNameProvider{})
+	}
 }
 
 type SwitchBlock struct {
@@ -1718,7 +1742,9 @@ func ParseOperations(scope *Scope, context *BlockContext, ops []Operation, minOp
 		node := new(OpGraph)
 		node.typeName = UNKNOWN_TYPE
 		node.operation = op
-		node.code = RenderOperationCode(op, scope)
+		if !op.IsVariable() {
+			node.code = RenderOperationCode(op, scope)
+		}
 
 		if op.data.PopCount() > 0 {
 			if op.data.PopCount() > len(stack) {
