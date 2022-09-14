@@ -227,8 +227,11 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 	return result
 }
 
+var LOCAL_FUNCTION_ID_COUNTER int = 0
+
 func NewLocalFunctionAtOffset(offset uint32) *FunctionDeclaration {
-	declaration := AddFunctionDeclaration("", fmt.Sprintf("local_function_%08X", offset))
+	declaration := AddFunctionDeclaration("", fmt.Sprintf("local_function_%d", LOCAL_FUNCTION_ID_COUNTER))
+	LOCAL_FUNCTION_ID_COUNTER++
 	FUNC_DEFINITION_MAP[offset] = declaration
 	return declaration
 }
