@@ -114,8 +114,8 @@ func (og *OpGraph) SetPossibleType(scope *Scope, typeName string) {
 		}
 
 	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL:
-		fncData := og.operation.data.(FunctionCallData)
-		fncData.declaration.returnInfo.AddReferencedType(typeName)
+		//fncData := og.operation.data.(FunctionCallData)
+		//fncData.declaration.returnInfo.AddReferencedType(typeName)
 	}
 }
 
@@ -241,44 +241,21 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				param := &(*funcData.declaration.parameters)[ii]
 				child := og.children[len(og.children)-1-ii]
 
-				commonType := UNKNOWN_TYPE
-
-				// TODO: More here....
-				if IsHandleType(child.typeName) && IsHandleType(param.typeName) {
-					if HandleIsDerivedFrom(child.typeName, param.typeName) {
-						commonType = child.typeName
-					} else if HandleIsDerivedFrom(param.typeName, child.typeName) {
-						commonType = param.typeName
-					} else {
-						// TODO: Freak out
-					}
-				} else if IsHandleType(child.typeName) {
-					commonType = child.typeName
-				} else if IsHandleType(param.typeName) {
-					commonType = param.typeName
-				} else {
-					if child.typeName == param.typeName {
-						commonType = child.typeName
-					} else {
-						if child.typeName != UNKNOWN_TYPE {
-							commonType = child.typeName
-						} else if param.typeName != UNKNOWN_TYPE {
-							commonType = param.typeName
-						}
-					}
-				}
-
-				if commonType != UNKNOWN_TYPE {
-					if funcData.declaration.autoDetectTypes {
-						param.variable.AddAssignedType(commonType)
-					}
-					child.SetPossibleType(scope, commonType)
+				if param.typeName != UNKNOWN_TYPE {
+					child.SetPossibleType(scope, param.typeName)
 				} else {
 					switch child.operation.opcode {
 					case OP_LITERAL_ZERO, OP_LITERAL_ONE:
 						param.variable.AddAssignedType("bool")
 						param.variable.AddAssignedType("int")
 					}
+				}
+
+				if child.typeName != UNKNOWN_TYPE {
+					if funcData.declaration.autoDetectTypes {
+						param.variable.AddAssignedType(child.typeName)
+					}
+
 				}
 
 				if param.typeName != UNKNOWN_TYPE {
@@ -323,8 +300,25 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
-	case OP_LOGICAL_AND, OP_LOGICAL_OR, OP_LOGICAL_NOT:
+	case OP_LOGICAL_AND, OP_LOGICAL_OR:
 		og.typeName = "bool"
+		child1 := og.children[0]
+		child2 := og.children[1]
+
+		if !child1.operation.IsCast() {
+			child1.SetPossibleType(scope, "bool")
+		}
+
+		if !child2.operation.IsCast() {
+			child2.SetPossibleType(scope, "bool")
+		}
+
+	case OP_LOGICAL_NOT:
+		og.typeName = "bool"
+		child1 := og.children[0]
+		if !child1.operation.IsCast() {
+			child1.SetPossibleType(scope, "bool")
+		}
 
 	case OP_INT_GT, OP_INT_LT, OP_INT_GT_EQUALS, OP_INT_LT_EQUALS:
 		og.typeName = "bool"
@@ -414,7 +408,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 		v := scope.variables[varData.index]
 		// Add to the variable's ref count if this isn't just from a handle init
 		if og.children[0].operation.opcode != OP_VARIABLE_INIT {
-			v.refCount++
+			v.assignmentCount++
 		}
 
 		// Check for assigning an enum from a literal integer
@@ -437,7 +431,11 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			fallthrough
 		case OP_LITERAL_ONE:
 			// It could be either of these really
-			v.AddAssignedType("bool")
+			if scope.function.IsParameterVariable(v) {
+				v.AddParameterAssignedType("bool")
+			} else {
+				v.AddAssignedType("bool")
+			}
 
 			// If we are assigning literal true or literal false
 			if v.typeName == "bool" {
@@ -457,7 +455,12 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 			og.typeName = childType
 			if og.typeName != UNKNOWN_TYPE {
-				v.AddAssignedType(og.typeName)
+				// We shouldn't alter our parameter type based on what (if anything) gets assigned to it inside the function
+				if scope.function.IsParameterVariable(v) {
+					v.AddParameterAssignedType(og.typeName)
+				} else {
+					v.AddAssignedType(og.typeName)
+				}
 			}
 		} else if v.typeName != UNKNOWN_TYPE {
 			og.children[0].SetPossibleType(scope, v.typeName)
@@ -471,7 +474,6 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			switch returnOp.operation.opcode {
 			case OP_LITERAL_ZERO, OP_LITERAL_ONE:
 				scope.function.returnInfo.AddAssignedType("bool")
-				scope.function.returnInfo.AddAssignedType("int")
 			default:
 				if returnOp.typeName != UNKNOWN_TYPE {
 					scope.function.returnInfo.AddAssignedType(returnOp.typeName)
@@ -480,7 +482,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			// If the function has a known return type, see if we need to convert any integers to bools or enums
 			if returnType != UNKNOWN_TYPE {
 				// Make sure local variables and local function return types are impacted by being returned here
-				returnOp.SetPossibleType(scope, returnType)
+				if !scope.function.autoDetectTypes {
+					returnOp.SetPossibleType(scope, returnType)
+				}
 
 				if IsEnumType(returnType) {
 					// Convert literal integers to enums
@@ -527,7 +531,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	}
 }
 
-func (og *OpGraph) CheckCode(scope *Scope) {
+func (og *OpGraph) checkCodeInternal(scope *Scope, parent *OpGraph) {
 
 	switch og.operation.opcode {
 	case OP_EQUALS, OP_NOT_EQUALS:
@@ -560,18 +564,28 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 			cw.Append("\n")
 		}
 	}
+
+	variable := og.operation.GetVariable(scope)
+
 	switch og.operation.opcode {
 	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
-		variable := og.operation.GetVariable(scope)
 		AddAssignmentBasedNamingProviders(variable, og.children[0])
 		fallthrough
 	case OP_VARIABLE_READ:
 		og.code = nil
+
+		if parent != nil && parent.operation.IsFunctionCall() {
+			AddParameterPassingBasedNamingProviders(variable, parent)
+		}
 	}
 
 	for idx := range og.children {
-		og.children[idx].CheckCode(scope)
+		og.children[idx].checkCodeInternal(scope, og)
 	}
+}
+
+func (og *OpGraph) CheckCode(scope *Scope) {
+	og.checkCodeInternal(scope, nil)
 }
 
 func (node *OpGraph) ShouldRenderBeforeChidlren() bool {
@@ -1165,7 +1179,7 @@ func (fl *ForLoop) renderIncrement(scope *Scope, writer CodeWriter) {
 	// Since they don't have an opcode for ++, try to detect it here at least
 	iterator, magnitude := fl.getIterationVariable(scope)
 
-	if iterator != nil {
+	if iterator != nil && !IsEnumType(iterator.typeName) {
 		switch magnitude {
 		case -1:
 			writer.Appendf("--%s", iterator.variableName)

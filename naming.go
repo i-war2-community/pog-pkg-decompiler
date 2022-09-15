@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/iancoleman/strcase"
 )
 
 type NameProvider interface {
@@ -37,8 +39,65 @@ func simpleNameConflictResolution(name string, index int) string {
 	return fmt.Sprintf("%s_%d", name, index)
 }
 
+type ConstantNameProvider struct{}
+
+func (np *ConstantNameProvider) GetPriority() int {
+	return 10
+}
+
+func (np *ConstantNameProvider) ResolveConflict(v *Variable, index int) string {
+	return simpleNameConflictResolution(v.variableName, index)
+}
+
+func (np *ConstantNameProvider) GetName(v *Variable) string {
+	switch v.typeName {
+	case "int", "float":
+		if v.assignmentCount == 1 {
+			return "constant"
+		}
+	}
+
+	return ""
+}
+
+type EnumTypeNameProvider struct{}
+
+func (np *EnumTypeNameProvider) GetPriority() int {
+	return 100
+}
+
+func (np *EnumTypeNameProvider) ResolveConflict(v *Variable, index int) string {
+	return simpleNameConflictResolution(v.variableName, index)
+}
+
+func (np *EnumTypeNameProvider) GetName(v *Variable) string {
+	if IsEnumType(v.typeName) {
+		return ConvertToIdentifier(strings.TrimPrefix(v.typeName, "e"))
+	}
+
+	return ""
+}
+
+type CollectionTypeNameProvider struct{}
+
+func (np *CollectionTypeNameProvider) GetPriority() int {
+	return 10
+}
+
+func (np *CollectionTypeNameProvider) ResolveConflict(v *Variable, index int) string {
+	return simpleNameConflictResolution(v.variableName, index)
+}
+
+func (np *CollectionTypeNameProvider) GetName(v *Variable) string {
+	if IsCollectionType(v.typeName) {
+		return fmt.Sprintf("local%s", strcase.ToCamel(v.typeName))
+	}
+
+	return ""
+}
+
 type GlobalNameProvider struct {
-	assignment *OpGraph
+	funcCall *OpGraph
 }
 
 func (np *GlobalNameProvider) GetPriority() int {
@@ -51,7 +110,7 @@ func (np *GlobalNameProvider) ResolveConflict(v *Variable, index int) string {
 
 func (np *GlobalNameProvider) GetName(v *Variable) string {
 	// Look for the Global call while allowing some other calls along the way
-	for node := np.assignment; node.operation.IsFunctionCall() && len(node.children) > 0; node = node.children[0] {
+	for node := np.funcCall; node.operation.IsFunctionCall() && len(node.children) > 0; node = node.children[0] {
 		fd := node.operation.GetFunctionDeclaration()
 		if fd.pkg == "Global" {
 			switch fd.name {
@@ -172,7 +231,7 @@ func getNameFromFunctionParameter(op *OpGraph, targetFunc, nestedFuncs *funcRege
 type SingleFunctionVariableNameFunc func(v *Variable, fd *FunctionDeclaration) string
 
 type SingleFunctionProvider struct {
-	assignment   *OpGraph
+	funcCall     *OpGraph
 	variableName SingleFunctionVariableNameFunc
 	function     *funcRegexp
 	nested       *funcRegexp
@@ -201,7 +260,7 @@ func (np *SingleFunctionProvider) GetName(v *Variable) string {
 		nested = newFuncRegexp(`.*`, `Cast`)
 	}
 
-	fd := opCallsFunction(np.assignment, np.function, nested)
+	fd := opCallsFunction(np.funcCall, np.function, nested)
 
 	if fd != nil {
 		return np.variableName(v, fd)
@@ -213,7 +272,7 @@ func (np *SingleFunctionProvider) GetName(v *Variable) string {
 type FunctionParameterVariableNameFunc func(v *Variable, parameterValue string, fd *FunctionDeclaration) string
 
 type FunctionParameterProvider struct {
-	assignment   *OpGraph
+	funcCall     *OpGraph
 	function     *funcRegexp
 	nested       *funcRegexp
 	parameter    *regexp.Regexp
@@ -248,7 +307,7 @@ func (np *FunctionParameterProvider) GetName(v *Variable) string {
 		parameter = regexp.MustCompile(`name`)
 	}
 
-	name, fd := getNameFromFunctionParameter(np.assignment, np.function, nested, parameter)
+	name, fd := getNameFromFunctionParameter(np.funcCall, np.function, nested, parameter)
 
 	if len(name) == 0 {
 		return ""
@@ -261,7 +320,7 @@ func (np *FunctionParameterProvider) GetName(v *Variable) string {
 }
 
 type FunctionChainParameterProvider struct {
-	assignment    *OpGraph
+	funcCall      *OpGraph
 	functionChain []*funcRegexp
 	nested        *funcRegexp
 	parameter     *regexp.Regexp
@@ -296,7 +355,7 @@ func (np *FunctionChainParameterProvider) GetName(v *Variable) string {
 		parameter = regexp.MustCompile(`name`)
 	}
 
-	name, fd := getNameFromFunctionChainParameter(np.assignment, np.functionChain, nested, parameter)
+	name, fd := getNameFromFunctionChainParameter(np.funcCall, np.functionChain, nested, parameter)
 
 	if len(name) == 0 {
 		return ""
@@ -315,6 +374,10 @@ var EXCLUDED_HANDLE_TYPES = map[string]bool{
 	"object": true,
 }
 
+var OVERRIDE_HANDLE_TYPES = map[string]string{
+	"task": "taskHandle",
+}
+
 type HandleTypeNameProvider struct {
 	handleType string
 }
@@ -328,12 +391,12 @@ func (np *HandleTypeNameProvider) ResolveConflict(v *Variable, index int) string
 }
 
 func (np *HandleTypeNameProvider) GetName(v *Variable) string {
-	handleType := np.handleType
-	if strings.HasPrefix(np.handleType, "h") {
-		handleType = np.handleType[1:]
-	}
+	handleType := strings.TrimPrefix(np.handleType, "h")
 
 	if _, ok := EXCLUDED_HANDLE_TYPES[handleType]; !ok {
+		if override, ok := OVERRIDE_HANDLE_TYPES[handleType]; ok {
+			return override
+		}
 		return handleType
 	}
 	return ""
@@ -372,133 +435,207 @@ func (np *IteratorNameProvider) GetName(v *Variable) string {
 }
 
 func AddAssignmentBasedNamingProviders(v *Variable, assignment *OpGraph) {
+	// Constant provider
+	v.AddNameProvider(&ConstantNameProvider{})
 	// Global provider
 	v.AddNameProvider(&GlobalNameProvider{
-		assignment: assignment,
+		funcCall: assignment,
 	})
 	// Find provider
 	v.AddNameProvider(&FunctionParameterProvider{
-		assignment: assignment,
-		function:   newFuncRegexp(`.*`, `Find`),
+		funcCall: assignment,
+		function: newFuncRegexp(`.*`, `Find`),
 	})
 	// Create Ship provider
 	v.AddNameProvider(&FunctionParameterProvider{
-		assignment: assignment,
-		function:   newFuncRegexp(`iShip`, `Create`),
-		parameter:  regexp.MustCompile(`template`),
+		funcCall:  assignment,
+		function:  newFuncRegexp(`iShip`, `Create`),
+		parameter: regexp.MustCompile(`template`),
 		variableName: func(v *Variable, parameterValue string, fd *FunctionDeclaration) string {
-			return fmt.Sprintf("ship_%s", parameterValue)
+			return fmt.Sprintf("ship%s", strcase.ToCamel(parameterValue))
 		},
 		priority: 1000,
 	})
 	// Create Sim provider
 	v.AddNameProvider(&FunctionParameterProvider{
-		assignment: assignment,
-		function:   newFuncRegexp(`Sim`, `Create`),
-		parameter:  regexp.MustCompile(`template`),
+		funcCall:  assignment,
+		function:  newFuncRegexp(`Sim`, `Create`),
+		parameter: regexp.MustCompile(`template`),
 		variableName: func(v *Variable, parameterValue string, fd *FunctionDeclaration) string {
-			return fmt.Sprintf("sim_%s", parameterValue)
+			return fmt.Sprintf("sim%s", strcase.ToCamel(parameterValue))
 		},
 		priority: 1000,
 	})
 	// Player Ship provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "playerShip" },
 		function:     newFuncRegexp("iShip", "FindPlayerShip"),
 		priority:     1000,
 	})
 	// Distance provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "distance" },
 		function:     newFuncRegexp(`.*`, `.*Distance.*`),
 	})
 	// Count provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return ConvertToIdentifier(fd.name) },
 		function:     newFuncRegexp(`.*`, `.*Count[^a-z]?.*`),
 	})
 	// Name provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "name" },
 		function:     newFuncRegexp(`.*`, `.*Name[^a-z]?.*`),
 		filter:       func(v *Variable) bool { return v.typeName == "string" },
 	})
 	// Object Property provider
 	v.AddNameProvider(&FunctionParameterProvider{
-		assignment: assignment,
-		function:   newFuncRegexp(`Object`, `.*Property`),
-		parameter:  regexp.MustCompile(`property`),
-		priority:   200,
+		funcCall:  assignment,
+		function:  newFuncRegexp(`Object`, `.*Property`),
+		parameter: regexp.MustCompile(`property`),
+		priority:  200,
 	})
 	// Task State provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		function:     newFuncRegexp(`State`, `Find`),
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "taskState" },
 		priority:     300,
 	})
 	// Screen Class provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		function:     newFuncRegexp(`GUI`, `CurrentScreenClassname`),
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "screenClass" },
 		priority:     300,
 	})
+	// Group Leader provider
+	v.AddNameProvider(&SingleFunctionProvider{
+		funcCall:     assignment,
+		function:     newFuncRegexp(`Group`, `Leader`),
+		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "groupLeader" },
+		priority:     300,
+	})
 	// Waypoint provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		function:     newFuncRegexp(`.*`, `.*Waypoint[^a-z]?.*`),
-		nested:       newFuncRegexp(``, ``),
+		nested:       newFuncRegexp(`none`, `none`),
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "waypoint" },
 		priority:     50,
 	})
 	// Named Waypoint provider
 	v.AddNameProvider(&FunctionChainParameterProvider{
-		assignment: assignment,
+		funcCall: assignment,
 		functionChain: []*funcRegexp{
 			newFuncRegexp(`.*`, `CreateWaypointRelativeTo|WaypointForEntity`),
 			newFuncRegexp(`iMapEntity`, `FindByName`),
 		},
 		variableName: func(v *Variable, parameterValue string, fd *FunctionDeclaration) string {
-			return fmt.Sprintf("waypoint_%s", parameterValue)
+			return fmt.Sprintf("waypoint%s", strcase.ToCamel(parameterValue))
 		},
 		priority: 1000,
 	})
 	// Group Iter provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		function:     newFuncRegexp(`Group`, `NthSim`),
-		nested:       newFuncRegexp(``, ``),
+		nested:       newFuncRegexp(`none`, `none`),
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "groupIter" },
 		priority:     50,
 	})
 	// Lagrange Points provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		function:     newFuncRegexp(`iMapEntity`, `SystemLagrangePoints`),
-		nested:       newFuncRegexp(``, ``),
+		nested:       newFuncRegexp(`none`, `none`),
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "lagrangePoints" },
 		priority:     100,
 	})
 	// Random provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		function:     newFuncRegexp(`Math`, `Random.*`),
-		nested:       newFuncRegexp(``, ``),
+		nested:       newFuncRegexp(`none`, `none`),
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "random" },
 		priority:     100,
 	})
 	// Target provider
 	v.AddNameProvider(&SingleFunctionProvider{
-		assignment:   assignment,
+		funcCall:     assignment,
 		function:     newFuncRegexp(`.*`, `.*Target[^a-z]?.*`),
-		nested:       newFuncRegexp(``, ``),
+		nested:       newFuncRegexp(`none`, `none`),
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return ConvertToIdentifier(fd.name) },
 		filter:       func(v *Variable) bool { return IsHandleType(v.typeName) },
 		priority:     50,
 	})
+	// Conversation Ask provider
+	v.AddNameProvider(&SingleFunctionProvider{
+		funcCall:     assignment,
+		function:     newFuncRegexp(`iConversation`, `Ask`),
+		nested:       newFuncRegexp(`none`, `none`),
+		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "convoResponse" },
+		filter:       func(v *Variable) bool { return v.typeName == "int" || IsEnumType(v.typeName) },
+		priority:     50,
+	})
+	// Current Task provider
+	v.AddNameProvider(&SingleFunctionProvider{
+		funcCall:     assignment,
+		function:     newFuncRegexp(`Task`, `Current`),
+		nested:       newFuncRegexp(`none`, `none`),
+		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "currentTask" },
+		priority:     100,
+	})
+	// Cast provider
+	v.AddNameProvider(&SingleFunctionProvider{
+		funcCall: assignment,
+		function: newFuncRegexp(`.*`, `Cast`),
+		nested:   newFuncRegexp(`none`, `none`),
+		variableName: func(v *Variable, fd *FunctionDeclaration) string {
+			pkg := strings.TrimPrefix(fd.pkg, "i")
+
+			if EXCLUDED_HANDLE_TYPES[strings.ToLower(pkg)] {
+				return ""
+			}
+
+			return ConvertToIdentifier(pkg)
+		},
+		priority: 50,
+	})
+}
+
+func AddParameterPassingBasedNamingProviders(v *Variable, funcCall *OpGraph) {
+	fd := funcCall.operation.GetFunctionDeclaration()
+
+	if fd == nil {
+		return
+	}
+
+	var varParameter *FunctionParameter = nil
+
+	for idx := 0; idx < len(funcCall.children); idx++ {
+		if funcCall.children[idx].operation.GetVariableStackIndex() == v.stackIndex {
+			varParameter = &(*fd.parameters)[len(funcCall.children)-1-idx]
+		}
+	}
+
+	// Only use this one if the variable was passed in as the property
+	if varParameter.parameterName == "property" {
+		// Object Property provider
+		v.AddNameProvider(&FunctionParameterProvider{
+			funcCall:  funcCall,
+			function:  newFuncRegexp(`Object`, `Add.*Property`),
+			nested:    newFuncRegexp(`none`, `none`),
+			parameter: regexp.MustCompile(`property`),
+			variableName: func(v *Variable, parameterValue string, fd *FunctionDeclaration) string {
+
+				return parameterValue
+			},
+			priority: 1000,
+		})
+	}
 }

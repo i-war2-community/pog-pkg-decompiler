@@ -539,11 +539,7 @@ func (d FunctionCallData) String() string {
 	if ASSEMBLY_OFFSET_PREFIX {
 		prefix = d.declaration.GetScopedName()
 	} else {
-		if len(d.declaration.pkg) > 0 {
-			prefix = d.declaration.GetScopedName()
-		} else {
-			prefix = "local_function"
-		}
+		prefix = d.declaration.GetScopedName()
 	}
 	if d.declaration.parameters != nil {
 		return fmt.Sprintf("%s %d", prefix, len(*d.declaration.parameters))

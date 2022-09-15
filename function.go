@@ -23,6 +23,17 @@ type FunctionDeclaration struct {
 	returnInfo      *Variable
 }
 
+func (fd *FunctionDeclaration) ReturnsNonVoid() bool {
+	return len(fd.returnInfo.typeName) > 0
+}
+
+func (fd *FunctionDeclaration) HasParameters() bool {
+	if fd.parameters == nil {
+		return false
+	}
+	return len(*fd.parameters) > 0
+}
+
 func (fd *FunctionDeclaration) FindParameter(regex *regexp.Regexp) (int, *FunctionParameter) {
 	for idx := range *fd.parameters {
 		p := &(*fd.parameters)[idx]
@@ -32,6 +43,17 @@ func (fd *FunctionDeclaration) FindParameter(regex *regexp.Regexp) (int, *Functi
 	}
 
 	return -1, nil
+}
+
+func (fd *FunctionDeclaration) IsParameterVariable(v *Variable) bool {
+	for idx := range *fd.parameters {
+		p := &(*fd.parameters)[idx]
+		if p.variable == v {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (fd *FunctionDeclaration) ResetPossibleTypes() {
@@ -123,6 +145,14 @@ func (fd *FunctionDefinition) ResolveAllNames() int {
 		// Add generic name providers here
 		if IsHandleType(v.typeName) {
 			v.AddNameProvider(&HandleTypeNameProvider{handleType: v.typeName})
+		}
+
+		if IsEnumType(v.typeName) {
+			v.AddNameProvider(&EnumTypeNameProvider{})
+		}
+
+		if IsCollectionType(v.typeName) {
+			v.AddNameProvider(&CollectionTypeNameProvider{})
 		}
 
 		if v.ResolveName() {
@@ -223,6 +253,18 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	// Write the function header
 	writer.Append(renderFunctionDefinitionHeader(fd.declaration))
+	if OUTPUT_ASSEMBLY {
+		if fd.declaration.ReturnsNonVoid() || fd.declaration.HasParameters() {
+			writer.Append(" // ")
+			if fd.declaration.ReturnsNonVoid() {
+				writer.Appendf("Return ID: %d ", fd.declaration.returnInfo.id)
+			}
+			for _, p := range *fd.declaration.parameters {
+				writer.Appendf("%s ID: %d ", p.parameterName, p.variable.id)
+			}
+		}
+	}
+
 	writer.Append("\n{\n")
 	writer.PushIndent()
 
@@ -268,10 +310,11 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 	result.pkg = pkg
 	result.name = name
 	result.returnInfo = &Variable{
-		stackIndex:      0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
-		assignedTypes:   map[string]bool{},
-		referencedTypes: map[string]bool{},
-		typeName:        UNKNOWN_TYPE,
+		stackIndex:             0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
+		assignedTypes:          map[string]bool{},
+		referencedTypes:        map[string]bool{},
+		parameterAssignedTypes: map[string]bool{},
+		typeName:               UNKNOWN_TYPE,
 	}
 
 	result.autoDetectTypes = true
@@ -300,10 +343,11 @@ func NewLocalFunctionAtOffset(offset uint32) *FunctionDeclaration {
 func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration {
 	result := new(FunctionDeclaration)
 	result.returnInfo = &Variable{
-		stackIndex:      0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
-		assignedTypes:   map[string]bool{},
-		referencedTypes: map[string]bool{},
-		typeName:        UNKNOWN_TYPE,
+		stackIndex:             0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
+		assignedTypes:          map[string]bool{},
+		referencedTypes:        map[string]bool{},
+		parameterAssignedTypes: map[string]bool{},
+		typeName:               UNKNOWN_TYPE,
 	}
 	result.autoDetectTypes = false
 
@@ -566,12 +610,13 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		for ii := 0; ii < len(*declaration.parameters); ii++ {
 			param := &(*declaration.parameters)[ii]
 			v := &Variable{
-				typeName:        param.typeName,
-				variableName:    param.parameterName,
-				stackIndex:      uint32(ii),
-				assignedTypes:   map[string]bool{},
-				referencedTypes: map[string]bool{},
-				id:              VARIABLE_ID_COUNTER,
+				typeName:               param.typeName,
+				variableName:           param.parameterName,
+				stackIndex:             uint32(ii),
+				assignedTypes:          map[string]bool{},
+				referencedTypes:        map[string]bool{},
+				parameterAssignedTypes: map[string]bool{},
+				id:                     VARIABLE_ID_COUNTER,
 			}
 			VARIABLE_ID_COUNTER++
 			definition.scope.variables = append(definition.scope.variables, v)
@@ -587,12 +632,13 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		var ii uint32
 		for ii = 0; ii < localVariableCount; ii++ {
 			lv := &Variable{
-				typeName:        UNKNOWN_TYPE,
-				variableName:    fmt.Sprintf("local_%d", ii),
-				stackIndex:      uint32(ii + definition.scope.localVariableIndexOffset),
-				assignedTypes:   map[string]bool{},
-				referencedTypes: map[string]bool{},
-				id:              VARIABLE_ID_COUNTER,
+				typeName:               UNKNOWN_TYPE,
+				variableName:           fmt.Sprintf("local_%d", ii),
+				stackIndex:             uint32(ii + definition.scope.localVariableIndexOffset),
+				assignedTypes:          map[string]bool{},
+				referencedTypes:        map[string]bool{},
+				parameterAssignedTypes: map[string]bool{},
+				id:                     VARIABLE_ID_COUNTER,
 			}
 			VARIABLE_ID_COUNTER++
 			definition.scope.variables = append(definition.scope.variables, lv)

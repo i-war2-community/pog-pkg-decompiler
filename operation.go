@@ -23,7 +23,7 @@ func (op *Operation) WriteAssembly(writer CodeWriter) {
 	}
 }
 
-func (op *Operation) GetVariable(scope *Scope) *Variable {
+func (op *Operation) GetVariableStackIndex() uint32 {
 	var index uint32 = 0xFFFFFFFF
 
 	switch op.opcode {
@@ -33,6 +33,12 @@ func (op *Operation) GetVariable(scope *Scope) *Variable {
 	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		index = op.data.(VariableWriteData).index
 	}
+
+	return index
+}
+
+func (op *Operation) GetVariable(scope *Scope) *Variable {
+	var index = op.GetVariableStackIndex()
 
 	if index < uint32(len(scope.variables)) {
 		return scope.variables[index]

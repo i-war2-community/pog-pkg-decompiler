@@ -298,7 +298,7 @@ func readSection(file *os.File, section *SectionHeader) error {
 		//fmt.Printf("%s", name)
 		lookup, ok := PACKAGES[name]
 		if !ok {
-			fmt.Printf("WARN: Exporting package '%s' not found in includes. Package name might be output with incorrect case!\n", name)
+			//fmt.Printf("WARN: Exporting package '%s' not found in includes. Package name might be output with incorrect case!\n", name)
 			//os.Exit(1)
 		} else {
 			name = lookup.name
@@ -586,7 +586,7 @@ func main() {
 					param.typeName = "int"
 					param.variable.AddReferencedType("int")
 					if param.variable.refCount > 0 {
-						fmt.Printf("WARN: Failed to resolve the type for parameter %s of function %s, defaulting to int.\n", param.parameterName, fnc.declaration.GetScopedName())
+						fmt.Printf("WARN: Failed to resolve the type for parameter %s id %d of function %s, defaulting to int.\n", param.parameterName, param.variable.id, fnc.declaration.GetScopedName())
 					}
 				}
 			}
