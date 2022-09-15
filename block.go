@@ -112,10 +112,6 @@ func (og *OpGraph) SetPossibleType(scope *Scope, typeName string) {
 				}
 			}
 		}
-
-	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL:
-		//fncData := og.operation.data.(FunctionCallData)
-		//fncData.declaration.returnInfo.AddReferencedType(typeName)
 	}
 }
 
@@ -368,18 +364,33 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
+		v1 := child1.operation.GetVariable(scope)
+		v2 := child2.operation.GetVariable(scope)
+
+		if child1IsHandle && child2IsHandle && v1 != nil && v2 != nil {
+			common := HighestCommonAncestorType(child1.typeName, child2.typeName)
+			v1.AddHandleEqualsType(common)
+			v2.AddHandleEqualsType(common)
+		}
+
 		if child1IsHandle {
 			if child2IsCast {
-				child2.children[0].SetPossibleType(scope, child1.typeName)
-			} else {
-				child2.SetPossibleType(scope, child1.typeName)
+				v2 = child2.children[0].operation.GetVariable(scope)
+				if v2 != nil {
+					v2.AddReferencedType(child1.typeName)
+				}
+			} else if v2 != nil {
+				v2.AddHandleEqualsType(child1.typeName)
 			}
 		}
 		if child2IsHandle {
 			if child1IsCast {
-				child1.children[0].SetPossibleType(scope, child2.typeName)
-			} else {
-				child1.SetPossibleType(scope, child2.typeName)
+				v1 = child1.children[0].operation.GetVariable(scope)
+				if v1 != nil {
+					v1.AddReferencedType(child2.typeName)
+				}
+			} else if v1 != nil {
+				v1.AddHandleEqualsType(child2.typeName)
 			}
 		}
 

@@ -44,6 +44,7 @@ type Variable struct {
 	assignedTypes          map[string]bool
 	referencedTypes        map[string]bool
 	parameterAssignedTypes map[string]bool
+	handleEqualsTypes      map[string]bool
 	potentialNames         []NameProvider
 	nameProvider           NameProvider
 	refCount               int
@@ -65,6 +66,10 @@ func (v *Variable) AddReferencedType(typeName string) {
 	v.referencedTypes[typeName] = true
 }
 
+func (v *Variable) AddHandleEqualsType(typeName string) {
+	v.handleEqualsTypes[typeName] = true
+}
+
 func (v *Variable) AddNameProvider(provider NameProvider) {
 	v.potentialNames = append(v.potentialNames, provider)
 }
@@ -73,6 +78,7 @@ func (v *Variable) ResetPossibleTypes() {
 	v.assignedTypes = map[string]bool{}
 	v.referencedTypes = map[string]bool{}
 	v.parameterAssignedTypes = map[string]bool{}
+	v.handleEqualsTypes = map[string]bool{}
 	v.refCount = 0
 	v.assignmentCount = 0
 }
@@ -101,6 +107,16 @@ func (v *Variable) GetParameterAssignedTypes() []string {
 	result := []string{}
 
 	for k := range v.parameterAssignedTypes {
+		result = append(result, k)
+	}
+
+	return result
+}
+
+func (v *Variable) GetHandleEqualsTypes() []string {
+	result := []string{}
+
+	for k := range v.handleEqualsTypes {
 		result = append(result, k)
 	}
 
@@ -253,28 +269,33 @@ func (v *Variable) ResolveType() bool {
 	assigned := v.GetAssignedTypes()
 	referenced := v.GetReferencedTypes()
 	parameterAssigned := v.GetParameterAssignedTypes()
+	handleEquals := v.GetHandleEqualsTypes()
 
 	assignedType := getTypeFromAssignedTypes(assigned)
 	referencedType := getTypeFromReferencedTypes(referenced)
 	parameterAssignedType := getTypeFromAssignedTypes(parameterAssigned)
 
-	if IsHandleType(assignedType) && IsHandleType(referencedType) {
-		if assignedType != referencedType && HandleIsDerivedFrom(assignedType, referencedType) {
-			detectedType = assignedType
-		} else {
-			detectedType = referencedType
-		}
-		if parameterAssignedType != UNKNOWN_TYPE {
-			detectedType = HighestCommonAncestorType(detectedType, parameterAssignedType)
-		}
-	} else if len(referenced) == 0 {
-		detectedType = assignedType
+	if len(handleEquals) > 0 {
+		detectedType = handleEquals[0]
 	} else {
-		// Handle the case where a handle is cast to a bool in an if statement
-		if referencedType == "bool" && IsHandleType(assignedType) {
+		if IsHandleType(assignedType) && IsHandleType(referencedType) {
+			if assignedType != referencedType && HandleIsDerivedFrom(assignedType, referencedType) {
+				detectedType = assignedType
+			} else {
+				detectedType = referencedType
+			}
+			if parameterAssignedType != UNKNOWN_TYPE {
+				detectedType = HighestCommonAncestorType(detectedType, parameterAssignedType)
+			}
+		} else if len(referenced) == 0 {
 			detectedType = assignedType
 		} else {
-			detectedType = referencedType
+			// Handle the case where a handle is cast to a bool in an if statement
+			if referencedType == "bool" && IsHandleType(assignedType) {
+				detectedType = assignedType
+			} else {
+				detectedType = referencedType
+			}
 		}
 	}
 

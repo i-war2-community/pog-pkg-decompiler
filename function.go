@@ -314,6 +314,7 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 		assignedTypes:          map[string]bool{},
 		referencedTypes:        map[string]bool{},
 		parameterAssignedTypes: map[string]bool{},
+		handleEqualsTypes:      map[string]bool{},
 		typeName:               UNKNOWN_TYPE,
 	}
 
@@ -347,6 +348,7 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 		assignedTypes:          map[string]bool{},
 		referencedTypes:        map[string]bool{},
 		parameterAssignedTypes: map[string]bool{},
+		handleEqualsTypes:      map[string]bool{},
 		typeName:               UNKNOWN_TYPE,
 	}
 	result.autoDetectTypes = false
@@ -616,6 +618,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 				assignedTypes:          map[string]bool{},
 				referencedTypes:        map[string]bool{},
 				parameterAssignedTypes: map[string]bool{},
+				handleEqualsTypes:      map[string]bool{},
 				id:                     VARIABLE_ID_COUNTER,
 			}
 			VARIABLE_ID_COUNTER++
@@ -638,6 +641,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 				assignedTypes:          map[string]bool{},
 				referencedTypes:        map[string]bool{},
 				parameterAssignedTypes: map[string]bool{},
+				handleEqualsTypes:      map[string]bool{},
 				id:                     VARIABLE_ID_COUNTER,
 			}
 			VARIABLE_ID_COUNTER++
