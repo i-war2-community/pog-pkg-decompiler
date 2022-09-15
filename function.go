@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -20,6 +21,39 @@ type FunctionDeclaration struct {
 	parameters      *[]FunctionParameter
 	autoDetectTypes bool
 	returnInfo      *Variable
+}
+
+func (fd *FunctionDeclaration) ReturnsNonVoid() bool {
+	return len(fd.returnInfo.typeName) > 0
+}
+
+func (fd *FunctionDeclaration) HasParameters() bool {
+	if fd.parameters == nil {
+		return false
+	}
+	return len(*fd.parameters) > 0
+}
+
+func (fd *FunctionDeclaration) FindParameter(regex *regexp.Regexp) (int, *FunctionParameter) {
+	for idx := range *fd.parameters {
+		p := &(*fd.parameters)[idx]
+		if regex.MatchString(p.parameterName) {
+			return idx, p
+		}
+	}
+
+	return -1, nil
+}
+
+func (fd *FunctionDeclaration) IsParameterVariable(v *Variable) bool {
+	for idx := range *fd.parameters {
+		p := &(*fd.parameters)[idx]
+		if p.variable == v {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (fd *FunctionDeclaration) ResetPossibleTypes() {
@@ -103,6 +137,63 @@ func (fd *FunctionDefinition) ResolveDeclarationTypes() int {
 	return resolvedCount
 }
 
+func (fd *FunctionDefinition) ResolveAllNames() int {
+	totalResolved := 0
+	for idx := range fd.scope.variables {
+		v := fd.scope.variables[idx]
+
+		// Add generic name providers here
+		if IsHandleType(v.typeName) {
+			v.AddNameProvider(&HandleTypeNameProvider{handleType: v.typeName})
+		}
+
+		if IsEnumType(v.typeName) {
+			v.AddNameProvider(&EnumTypeNameProvider{})
+		}
+
+		if IsCollectionType(v.typeName) {
+			v.AddNameProvider(&CollectionTypeNameProvider{})
+		}
+
+		if v.ResolveName() {
+			totalResolved++
+		}
+	}
+
+	nameCollisions := map[string][]*Variable{}
+
+	// Find name collisions
+	for _, v := range fd.scope.variables {
+		nameCollisions[v.variableName] = append(nameCollisions[v.variableName], v)
+	}
+
+	// Resolve name collisions
+	for _, vars := range nameCollisions {
+		if len(vars) > 1 {
+			for idx, v := range vars {
+				v.ResolveNamingConflict(idx)
+			}
+		}
+	}
+
+	// Copy over the variable names to our parameters if we are auto detecting the types for this function
+	if fd.declaration.autoDetectTypes {
+		for idx := range *fd.declaration.parameters {
+			p := &(*fd.declaration.parameters)[idx]
+			p.parameterName = p.variable.variableName
+		}
+	}
+
+	// Put underscores on the end of all function parameter names
+	for idx := range *fd.declaration.parameters {
+		p := &(*fd.declaration.parameters)[idx]
+		p.parameterName = fmt.Sprintf("%s_", p.parameterName)
+		p.variable.variableName = p.parameterName
+	}
+
+	return totalResolved
+}
+
 func (fd *FunctionDefinition) RenderPrototype(writer CodeWriter) {
 	// Write the function prototype
 	writer.Appendf("%s ", PROTOTYPE_PREFIX)
@@ -124,7 +215,7 @@ func (fd *FunctionDefinition) isLocalVariableInitialAssignment(statement *Statem
 		op2 = op2.children[0]
 	}
 
-	if op1.operation.opcode == OP_POP_STACK && (op2.operation.opcode == OP_VARIABLE_WRITE || op2.operation.opcode == OP_HANDLE_VARIABLE_WRITE) {
+	if op1.operation.opcode == OP_POP_STACK && (op2.operation.opcode == OP_VARIABLE_WRITE || op2.operation.opcode == OP_STRING_VARIABLE_WRITE) {
 		varData := op2.operation.data.(VariableWriteData)
 		references := op2.children[0].GetAllReferencedVariableIndices()
 		for idx := varData.index; idx < uint32(len(fd.scope.variables)); idx++ {
@@ -146,7 +237,7 @@ func (fd *FunctionDefinition) getLatestVariableWriteIndexBeforeOffset(offset uin
 	latestVariableIndex := -1
 	for idx := fd.startingIndex; idx < endIdx+fd.startingIndex; idx++ {
 		switch OPERATIONS[idx].opcode {
-		case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+		case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 			varData := OPERATIONS[idx].data.(VariableWriteData)
 			latestVariableIndex = int(varData.index)
 		}
@@ -162,6 +253,18 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	// Write the function header
 	writer.Append(renderFunctionDefinitionHeader(fd.declaration))
+	if OUTPUT_ASSEMBLY {
+		if fd.declaration.ReturnsNonVoid() || fd.declaration.HasParameters() {
+			writer.Append(" // ")
+			if fd.declaration.ReturnsNonVoid() {
+				writer.Appendf("Return ID: %d ", fd.declaration.returnInfo.id)
+			}
+			for _, p := range *fd.declaration.parameters {
+				writer.Appendf("%s ID: %d ", p.parameterName, p.variable.id)
+			}
+		}
+	}
+
 	writer.Append("\n{\n")
 	writer.PushIndent()
 
@@ -189,14 +292,14 @@ func (fd *FunctionDefinition) Render(writer CodeWriter) {
 
 	fd.body = fd.body[len(assignments):]
 
-	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, fd.declaration, writer)
+	writeLocalVariableDeclarations(fd.scope.variables[fd.scope.localVariableIndexOffset:], assignments, fd, writer)
 
 	if DEBUG_LOGGING {
 		writer.Appendf(`debug atomic Debug.PrintString("Inside function: %s %s\n");`, EXPORTING_PACKAGE, renderFunctionDefinitionHeader(fd.declaration))
 		writer.Append("\n")
 	}
 
-	RenderBlockElements(fd.body, writer)
+	RenderBlockElements(fd.body, fd.scope, writer)
 
 	writer.PopIndent()
 	writer.Append("}\n\n")
@@ -207,10 +310,12 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 	result.pkg = pkg
 	result.name = name
 	result.returnInfo = &Variable{
-		stackIndex:      0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
-		assignedTypes:   map[string]bool{},
-		referencedTypes: map[string]bool{},
-		typeName:        UNKNOWN_TYPE,
+		stackIndex:             0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
+		assignedTypes:          map[string]bool{},
+		referencedTypes:        map[string]bool{},
+		parameterAssignedTypes: map[string]bool{},
+		handleEqualsTypes:      map[string]bool{},
+		typeName:               UNKNOWN_TYPE,
 	}
 
 	result.autoDetectTypes = true
@@ -239,10 +344,12 @@ func NewLocalFunctionAtOffset(offset uint32) *FunctionDeclaration {
 func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration {
 	result := new(FunctionDeclaration)
 	result.returnInfo = &Variable{
-		stackIndex:      0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
-		assignedTypes:   map[string]bool{},
-		referencedTypes: map[string]bool{},
-		typeName:        UNKNOWN_TYPE,
+		stackIndex:             0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
+		assignedTypes:          map[string]bool{},
+		referencedTypes:        map[string]bool{},
+		parameterAssignedTypes: map[string]bool{},
+		handleEqualsTypes:      map[string]bool{},
+		typeName:               UNKNOWN_TYPE,
 	}
 	result.autoDetectTypes = false
 
@@ -359,7 +466,7 @@ func (f *FunctionDeclaration) GetScopedName() string {
 	}
 }
 
-func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint32]*Statement, declaration *FunctionDeclaration, writer CodeWriter) {
+func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint32]*Statement, definition *FunctionDefinition, writer CodeWriter) {
 	written := 0
 	for ii := 0; ii < len(variables); ii++ {
 		lv := variables[ii]
@@ -373,12 +480,12 @@ func writeLocalVariableDeclarations(variables []*Variable, assignments map[uint3
 		}
 
 		if lv.typeName == UNKNOWN_TYPE {
-			fmt.Printf("ERROR: Failed to determine type for local variable %s id %d in function %s\n", lv.variableName, lv.id, declaration.GetScopedName())
+			fmt.Printf("ERROR: Failed to determine type for local variable %s id %d in function %s\n", lv.variableName, lv.id, definition.declaration.GetScopedName())
 		}
 
 		if assignment, ok := assignments[lv.stackIndex]; ok {
 			writer.Appendf("%s ", lv.typeName)
-			assignment.Render(writer)
+			assignment.Render(definition.scope, writer)
 			writer.Append(";")
 		} else {
 			writer.Appendf("%s %s;", lv.typeName, lv.variableName)
@@ -467,7 +574,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 					maxIndex = index
 				}
 
-			case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+			case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 				varData := op.data.(VariableWriteData)
 				index := int(varData.index)
 				if index > maxIndex {
@@ -505,12 +612,14 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		for ii := 0; ii < len(*declaration.parameters); ii++ {
 			param := &(*declaration.parameters)[ii]
 			v := &Variable{
-				typeName:        param.typeName,
-				variableName:    param.parameterName,
-				stackIndex:      uint32(ii),
-				assignedTypes:   map[string]bool{},
-				referencedTypes: map[string]bool{},
-				id:              VARIABLE_ID_COUNTER,
+				typeName:               param.typeName,
+				variableName:           param.parameterName,
+				stackIndex:             uint32(ii),
+				assignedTypes:          map[string]bool{},
+				referencedTypes:        map[string]bool{},
+				parameterAssignedTypes: map[string]bool{},
+				handleEqualsTypes:      map[string]bool{},
+				id:                     VARIABLE_ID_COUNTER,
 			}
 			VARIABLE_ID_COUNTER++
 			definition.scope.variables = append(definition.scope.variables, v)
@@ -526,12 +635,14 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 		var ii uint32
 		for ii = 0; ii < localVariableCount; ii++ {
 			lv := &Variable{
-				typeName:        UNKNOWN_TYPE,
-				variableName:    fmt.Sprintf("local_%d", ii),
-				stackIndex:      uint32(ii + definition.scope.localVariableIndexOffset),
-				assignedTypes:   map[string]bool{},
-				referencedTypes: map[string]bool{},
-				id:              VARIABLE_ID_COUNTER,
+				typeName:               UNKNOWN_TYPE,
+				variableName:           fmt.Sprintf("local_%d", ii),
+				stackIndex:             uint32(ii + definition.scope.localVariableIndexOffset),
+				assignedTypes:          map[string]bool{},
+				referencedTypes:        map[string]bool{},
+				parameterAssignedTypes: map[string]bool{},
+				handleEqualsTypes:      map[string]bool{},
+				id:                     VARIABLE_ID_COUNTER,
 			}
 			VARIABLE_ID_COUNTER++
 			definition.scope.variables = append(definition.scope.variables, lv)
@@ -609,7 +720,7 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 					return endIdx, definition
 				}
 
-			case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+			case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 				varData := op.data.(VariableWriteData)
 				if varData.index >= variableCount {
 					fmt.Printf("ERROR: Function %s tries to write to variable at index %d while only %d were declared, skipping.\n", declaration.GetScopedName(), varData.index, variableCount)

@@ -37,14 +37,19 @@ func IsCollectionType(typeName string) bool {
 }
 
 type Variable struct {
-	typeName        string
-	variableName    string
-	stackIndex      uint32
-	hasInit         bool
-	assignedTypes   map[string]bool
-	referencedTypes map[string]bool
-	refCount        int
-	id              int
+	typeName               string
+	variableName           string
+	stackIndex             uint32
+	hasInit                bool
+	assignedTypes          map[string]bool
+	referencedTypes        map[string]bool
+	parameterAssignedTypes map[string]bool
+	handleEqualsTypes      map[string]bool
+	potentialNames         []NameProvider
+	nameProvider           NameProvider
+	refCount               int
+	assignmentCount        int
+	id                     int
 }
 
 var VARIABLE_ID_COUNTER int = 0
@@ -53,14 +58,29 @@ func (v *Variable) AddAssignedType(typeName string) {
 	v.assignedTypes[typeName] = true
 }
 
+func (v *Variable) AddParameterAssignedType(typeName string) {
+	v.parameterAssignedTypes[typeName] = true
+}
+
 func (v *Variable) AddReferencedType(typeName string) {
 	v.referencedTypes[typeName] = true
+}
+
+func (v *Variable) AddHandleEqualsType(typeName string) {
+	v.handleEqualsTypes[typeName] = true
+}
+
+func (v *Variable) AddNameProvider(provider NameProvider) {
+	v.potentialNames = append(v.potentialNames, provider)
 }
 
 func (v *Variable) ResetPossibleTypes() {
 	v.assignedTypes = map[string]bool{}
 	v.referencedTypes = map[string]bool{}
+	v.parameterAssignedTypes = map[string]bool{}
+	v.handleEqualsTypes = map[string]bool{}
 	v.refCount = 0
+	v.assignmentCount = 0
 }
 
 func (v *Variable) GetAssignedTypes() []string {
@@ -77,6 +97,26 @@ func (v *Variable) GetReferencedTypes() []string {
 	result := []string{}
 
 	for k := range v.referencedTypes {
+		result = append(result, k)
+	}
+
+	return result
+}
+
+func (v *Variable) GetParameterAssignedTypes() []string {
+	result := []string{}
+
+	for k := range v.parameterAssignedTypes {
+		result = append(result, k)
+	}
+
+	return result
+}
+
+func (v *Variable) GetHandleEqualsTypes() []string {
+	result := []string{}
+
+	for k := range v.handleEqualsTypes {
 		result = append(result, k)
 	}
 
@@ -180,7 +220,18 @@ func getTypeFromAssignedTypes(assigned []string) string {
 	handleTypes := getHandleTypes(assigned)
 
 	if len(handleTypes) > 0 {
-		return "hobject"
+		// Find the highest common ancestor among all the types
+		highest := handleTypes[0]
+
+		// Loop through the remaining types and make sure we find the highest common ancestor
+		for _, h := range handleTypes[1:] {
+			highest = HighestCommonAncestorType(highest, h)
+			if highest == UNKNOWN_TYPE {
+				return UNKNOWN_TYPE
+			}
+		}
+
+		return highest
 	}
 
 	return getBestNonHandleType(assigned)
@@ -214,18 +265,38 @@ func getTypeFromReferencedTypes(referenced []string) string {
 }
 
 func (v *Variable) ResolveType() bool {
-	// if v.typeName != UNKNOWN_TYPE {
-	// 	return false
-	// }
 	detectedType := UNKNOWN_TYPE
 	assigned := v.GetAssignedTypes()
 	referenced := v.GetReferencedTypes()
+	parameterAssigned := v.GetParameterAssignedTypes()
+	handleEquals := v.GetHandleEqualsTypes()
 
-	// If we have no referenced types, we must be what was assigned to us
-	if len(referenced) == 0 {
-		detectedType = getTypeFromAssignedTypes(assigned)
+	assignedType := getTypeFromAssignedTypes(assigned)
+	referencedType := getTypeFromReferencedTypes(referenced)
+	parameterAssignedType := getTypeFromAssignedTypes(parameterAssigned)
+
+	if len(handleEquals) > 0 {
+		detectedType = handleEquals[0]
 	} else {
-		detectedType = getTypeFromReferencedTypes(referenced)
+		if IsHandleType(assignedType) && IsHandleType(referencedType) {
+			if assignedType != referencedType && HandleIsDerivedFrom(assignedType, referencedType) {
+				detectedType = assignedType
+			} else {
+				detectedType = referencedType
+			}
+			if parameterAssignedType != UNKNOWN_TYPE {
+				detectedType = HighestCommonAncestorType(detectedType, parameterAssignedType)
+			}
+		} else if len(referenced) == 0 {
+			detectedType = assignedType
+		} else {
+			// Handle the case where a handle is cast to a bool in an if statement
+			if referencedType == "bool" && IsHandleType(assignedType) {
+				detectedType = assignedType
+			} else {
+				detectedType = referencedType
+			}
+		}
 	}
 
 	if detectedType != UNKNOWN_TYPE && v.typeName != detectedType {
@@ -235,6 +306,27 @@ func (v *Variable) ResolveType() bool {
 	}
 
 	return false
+}
+
+func (v *Variable) ResolveName() bool {
+	provider := GetHighestPriorityProvider(v, v.potentialNames)
+	if provider == nil {
+		return false
+	}
+	name := provider.GetName(v)
+	if len(name) > 0 {
+		v.nameProvider = provider
+		v.variableName = name
+		return true
+	}
+
+	return false
+}
+
+func (v *Variable) ResolveNamingConflict(index int) {
+	if v.nameProvider != nil {
+		v.variableName = v.nameProvider.ResolveConflict(v, index)
+	}
 }
 
 type EnumTypeInfo struct {
@@ -275,6 +367,18 @@ func HandleIsDerivedFrom(handleType string, baseType string) bool {
 		return false
 	}
 	return HandleIsDerivedFrom(HANDLE_MAP[handleType].baseType, baseType)
+}
+
+func HighestCommonAncestorType(leftType string, rightType string) string {
+	for leftIter := leftType; len(leftIter) > 0; leftIter = HANDLE_MAP[leftIter].baseType {
+		for rightIter := rightType; len(rightIter) > 0; rightIter = HANDLE_MAP[rightIter].baseType {
+			if leftIter == rightIter {
+				return leftIter
+			}
+		}
+	}
+
+	return UNKNOWN_TYPE
 }
 
 func GetCastFunctionForHandleType(handleType string) string {

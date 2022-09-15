@@ -23,12 +23,60 @@ func (op *Operation) WriteAssembly(writer CodeWriter) {
 	}
 }
 
-func IsFunctionCall(operation *Operation) bool {
+func (op *Operation) GetVariableStackIndex() uint32 {
+	var index uint32 = 0xFFFFFFFF
+
+	switch op.opcode {
+	case OP_VARIABLE_READ:
+		index = op.data.(VariableReadData).index
+
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
+		index = op.data.(VariableWriteData).index
+	}
+
+	return index
+}
+
+func (op *Operation) GetVariable(scope *Scope) *Variable {
+	var index = op.GetVariableStackIndex()
+
+	if index < uint32(len(scope.variables)) {
+		return scope.variables[index]
+	}
+
+	return nil
+}
+
+func (operation *Operation) IsFunctionCall() bool {
 	switch operation.opcode {
 	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_IMPORTED, OP_TASK_CALL_LOCAL:
 		return true
 	}
 	return false
+}
+
+func (operation *Operation) IsVariable() bool {
+	switch operation.opcode {
+	case OP_VARIABLE_READ, OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
+		return true
+	}
+	return false
+}
+
+func (operation *Operation) IsCast() bool {
+	switch operation.opcode {
+	case OP_CAST_FLT_TO_INT, OP_CAST_INT_TO_FLT, OP_CAST_TO_BOOL:
+		return true
+	}
+	return false
+}
+
+func (operation *Operation) GetFunctionDeclaration() *FunctionDeclaration {
+	switch operation.opcode {
+	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_IMPORTED, OP_TASK_CALL_LOCAL:
+		return operation.data.(FunctionCallData).declaration
+	}
+	return nil
 }
 
 func IsLiteralInteger(operation *Operation) bool {
@@ -70,7 +118,7 @@ func RenderFloat(flt float32) string {
 func RenderOperationCode(operation *Operation, scope *Scope) *string {
 	var result string
 	switch operation.opcode {
-	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		writeData := operation.data.(VariableWriteData)
 		v := scope.GetVariableByStackIndex(writeData.index)
 		if v != nil {

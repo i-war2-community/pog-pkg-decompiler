@@ -29,7 +29,7 @@ func (bc *BlockContext) IsCurrentBlockIfBlock() bool {
 }
 
 type BlockElement interface {
-	Render(writer CodeWriter)
+	Render(scope *Scope, writer CodeWriter)
 	IsBlock() bool
 	SpaceAbove() bool
 	SpaceBelow() bool
@@ -51,7 +51,7 @@ func (og *OpGraph) GetAllReferencedVariableIndices() map[uint32]bool {
 		varData := og.operation.data.(VariableReadData)
 		result[varData.index] = true
 
-	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		varData := og.operation.data.(VariableWriteData)
 		result[varData.index] = true
 	}
@@ -64,6 +64,21 @@ func (og *OpGraph) GetAllReferencedVariableIndices() map[uint32]bool {
 	}
 
 	return result
+}
+
+func (og *OpGraph) GetFunctionParameterChild(parameterIndex int) *OpGraph {
+	if !og.operation.IsFunctionCall() {
+		return nil
+	}
+	// Find the corresponding operation
+	if parameterIndex >= 0 {
+		opIndex := (len(og.children) - 1) - parameterIndex
+		if opIndex < len(og.children) {
+			return og.children[opIndex]
+		}
+	}
+
+	return nil
 }
 
 func (og *OpGraph) String() string {
@@ -97,10 +112,6 @@ func (og *OpGraph) SetPossibleType(scope *Scope, typeName string) {
 				}
 			}
 		}
-
-	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL:
-		fncData := og.operation.data.(FunctionCallData)
-		fncData.declaration.returnInfo.AddReferencedType(typeName)
 	}
 }
 
@@ -135,7 +146,7 @@ func (og *OpGraph) GetVariableIndices() []uint32 {
 		data := og.operation.data.(VariableReadData)
 		result = append(result, data.index)
 
-	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		data := og.operation.data.(VariableWriteData)
 		result = append(result, data.index)
 	}
@@ -226,44 +237,21 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 				param := &(*funcData.declaration.parameters)[ii]
 				child := og.children[len(og.children)-1-ii]
 
-				commonType := UNKNOWN_TYPE
-
-				// TODO: More here....
-				if IsHandleType(child.typeName) && IsHandleType(param.typeName) {
-					if HandleIsDerivedFrom(child.typeName, param.typeName) {
-						commonType = child.typeName
-					} else if HandleIsDerivedFrom(param.typeName, child.typeName) {
-						commonType = param.typeName
-					} else {
-						// TODO: Freak out
-					}
-				} else if IsHandleType(child.typeName) {
-					commonType = child.typeName
-				} else if IsHandleType(param.typeName) {
-					commonType = param.typeName
-				} else {
-					if child.typeName == param.typeName {
-						commonType = child.typeName
-					} else {
-						if child.typeName != UNKNOWN_TYPE {
-							commonType = child.typeName
-						} else if param.typeName != UNKNOWN_TYPE {
-							commonType = param.typeName
-						}
-					}
-				}
-
-				if commonType != UNKNOWN_TYPE {
-					if funcData.declaration.autoDetectTypes {
-						param.variable.AddAssignedType(commonType)
-					}
-					child.SetPossibleType(scope, commonType)
+				if param.typeName != UNKNOWN_TYPE {
+					child.SetPossibleType(scope, param.typeName)
 				} else {
 					switch child.operation.opcode {
 					case OP_LITERAL_ZERO, OP_LITERAL_ONE:
 						param.variable.AddAssignedType("bool")
 						param.variable.AddAssignedType("int")
 					}
+				}
+
+				if child.typeName != UNKNOWN_TYPE {
+					if funcData.declaration.autoDetectTypes {
+						param.variable.AddAssignedType(child.typeName)
+					}
+
 				}
 
 				if param.typeName != UNKNOWN_TYPE {
@@ -308,8 +296,25 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
-	case OP_LOGICAL_AND, OP_LOGICAL_OR, OP_LOGICAL_NOT:
+	case OP_LOGICAL_AND, OP_LOGICAL_OR:
 		og.typeName = "bool"
+		child1 := og.children[0]
+		child2 := og.children[1]
+
+		if !child1.operation.IsCast() {
+			child1.SetPossibleType(scope, "bool")
+		}
+
+		if !child2.operation.IsCast() {
+			child2.SetPossibleType(scope, "bool")
+		}
+
+	case OP_LOGICAL_NOT:
+		og.typeName = "bool"
+		child1 := og.children[0]
+		if !child1.operation.IsCast() {
+			child1.SetPossibleType(scope, "bool")
+		}
 
 	case OP_INT_GT, OP_INT_LT, OP_INT_GT_EQUALS, OP_INT_LT_EQUALS:
 		og.typeName = "bool"
@@ -359,18 +364,33 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 		}
 
+		v1 := child1.operation.GetVariable(scope)
+		v2 := child2.operation.GetVariable(scope)
+
+		if child1IsHandle && child2IsHandle && v1 != nil && v2 != nil {
+			common := HighestCommonAncestorType(child1.typeName, child2.typeName)
+			v1.AddHandleEqualsType(common)
+			v2.AddHandleEqualsType(common)
+		}
+
 		if child1IsHandle {
 			if child2IsCast {
-				child2.children[0].SetPossibleType(scope, child1.typeName)
-			} else {
-				child2.SetPossibleType(scope, child1.typeName)
+				v2 = child2.children[0].operation.GetVariable(scope)
+				if v2 != nil {
+					v2.AddReferencedType(child1.typeName)
+				}
+			} else if v2 != nil {
+				v2.AddHandleEqualsType(child1.typeName)
 			}
 		}
 		if child2IsHandle {
 			if child1IsCast {
-				child1.children[0].SetPossibleType(scope, child2.typeName)
-			} else {
-				child1.SetPossibleType(scope, child2.typeName)
+				v1 = child1.children[0].operation.GetVariable(scope)
+				if v1 != nil {
+					v1.AddReferencedType(child2.typeName)
+				}
+			} else if v1 != nil {
+				v1.AddHandleEqualsType(child2.typeName)
 			}
 		}
 
@@ -394,12 +414,12 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			og.typeName = scope.variables[varData.index].typeName
 		}
 
-	case OP_VARIABLE_WRITE, OP_HANDLE_VARIABLE_WRITE:
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
 		varData := og.operation.data.(VariableWriteData)
 		v := scope.variables[varData.index]
 		// Add to the variable's ref count if this isn't just from a handle init
 		if og.children[0].operation.opcode != OP_VARIABLE_INIT {
-			v.refCount++
+			v.assignmentCount++
 		}
 
 		// Check for assigning an enum from a literal integer
@@ -422,7 +442,11 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			fallthrough
 		case OP_LITERAL_ONE:
 			// It could be either of these really
-			v.AddAssignedType("bool")
+			if scope.function.IsParameterVariable(v) {
+				v.AddParameterAssignedType("bool")
+			} else {
+				v.AddAssignedType("bool")
+			}
 
 			// If we are assigning literal true or literal false
 			if v.typeName == "bool" {
@@ -442,7 +466,12 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			}
 			og.typeName = childType
 			if og.typeName != UNKNOWN_TYPE {
-				v.AddAssignedType(og.typeName)
+				// We shouldn't alter our parameter type based on what (if anything) gets assigned to it inside the function
+				if scope.function.IsParameterVariable(v) {
+					v.AddParameterAssignedType(og.typeName)
+				} else {
+					v.AddAssignedType(og.typeName)
+				}
 			}
 		} else if v.typeName != UNKNOWN_TYPE {
 			og.children[0].SetPossibleType(scope, v.typeName)
@@ -456,7 +485,6 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			switch returnOp.operation.opcode {
 			case OP_LITERAL_ZERO, OP_LITERAL_ONE:
 				scope.function.returnInfo.AddAssignedType("bool")
-				scope.function.returnInfo.AddAssignedType("int")
 			default:
 				if returnOp.typeName != UNKNOWN_TYPE {
 					scope.function.returnInfo.AddAssignedType(returnOp.typeName)
@@ -465,7 +493,9 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 			// If the function has a known return type, see if we need to convert any integers to bools or enums
 			if returnType != UNKNOWN_TYPE {
 				// Make sure local variables and local function return types are impacted by being returned here
-				returnOp.SetPossibleType(scope, returnType)
+				if !scope.function.autoDetectTypes {
+					returnOp.SetPossibleType(scope, returnType)
+				}
 
 				if IsEnumType(returnType) {
 					// Convert literal integers to enums
@@ -512,10 +542,7 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 	}
 }
 
-func (og *OpGraph) CheckCode(scope *Scope) {
-	for idx := range og.children {
-		og.children[idx].CheckCode(scope)
-	}
+func (og *OpGraph) checkCodeInternal(scope *Scope, parent *OpGraph) {
 
 	switch og.operation.opcode {
 	case OP_EQUALS, OP_NOT_EQUALS:
@@ -540,7 +567,7 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 			cw := NewCodeWriter(os.Stdout)
 			cw.Appendf("ERROR: Mismatched handle types in equivalence check at offset 0x%08X. This will cause both handles to be cast to bools and then compared:\n", og.operation.offset)
 			cw.PushIndent()
-			og.Render(cw, false)
+			og.Render(scope, cw, false)
 			cw.Append("\n")
 			cw.Appendf("L Type: %s\n", child1Type)
 			cw.Appendf("R Type: %s\n", child2Type)
@@ -548,10 +575,32 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 			cw.Append("\n")
 		}
 	}
+
+	variable := og.operation.GetVariable(scope)
+
+	switch og.operation.opcode {
+	case OP_VARIABLE_WRITE, OP_STRING_VARIABLE_WRITE:
+		AddAssignmentBasedNamingProviders(variable, og.children[0])
+		fallthrough
+	case OP_VARIABLE_READ:
+		og.code = nil
+
+		if parent != nil && parent.operation.IsFunctionCall() {
+			AddParameterPassingBasedNamingProviders(variable, parent)
+		}
+	}
+
+	for idx := range og.children {
+		og.children[idx].checkCodeInternal(scope, og)
+	}
+}
+
+func (og *OpGraph) CheckCode(scope *Scope) {
+	og.checkCodeInternal(scope, nil)
 }
 
 func (node *OpGraph) ShouldRenderBeforeChidlren() bool {
-	if IsFunctionCall(node.operation) {
+	if node.operation.IsFunctionCall() {
 		return true
 	}
 
@@ -559,7 +608,7 @@ func (node *OpGraph) ShouldRenderBeforeChidlren() bool {
 }
 
 func (node *OpGraph) ShouldUseParentheses(onlyChild bool) bool {
-	if IsFunctionCall(node.operation) {
+	if node.operation.IsFunctionCall() {
 		return true
 	}
 
@@ -576,7 +625,12 @@ func (node *OpGraph) ShouldUseParentheses(onlyChild bool) bool {
 	return !onlyChild && popCount > 1
 }
 
-func (node *OpGraph) renderSelf(writer CodeWriter) {
+func (node *OpGraph) renderSelf(scope *Scope, writer CodeWriter) {
+	// See if this still needs to happen
+	if node.code == nil {
+		node.code = RenderOperationCode(node.operation, scope)
+	}
+
 	if node.code != nil {
 		writer.Append(*node.code)
 	} else {
@@ -589,27 +643,27 @@ func (node *OpGraph) renderSelf(writer CodeWriter) {
 	}
 }
 
-func (node *OpGraph) Render(writer CodeWriter, onlyChild bool) {
+func (node *OpGraph) Render(scope *Scope, writer CodeWriter, onlyChild bool) {
 
 	if !node.ShouldRenderBeforeChidlren() {
 		if node.ShouldUseParentheses(onlyChild) {
 			writer.Append("(")
 		}
 
-		node.children[0].Render(writer, false)
+		node.children[0].Render(scope, writer, false)
 
 		writer.Append(" ")
-		node.renderSelf(writer)
+		node.renderSelf(scope, writer)
 		writer.Append(" ")
 
-		node.children[1].Render(writer, false)
+		node.children[1].Render(scope, writer, false)
 
 		if node.ShouldUseParentheses(onlyChild) {
 			writer.Append(")")
 		}
 	} else {
 		// Render ourselves
-		node.renderSelf(writer)
+		node.renderSelf(scope, writer)
 
 		// Render our open parenthesis
 		if node.ShouldUseParentheses(onlyChild) {
@@ -621,7 +675,7 @@ func (node *OpGraph) Render(writer CodeWriter, onlyChild bool) {
 
 		// Render our children
 		for ii := len(node.children) - 1; ii >= 0; ii-- {
-			node.children[ii].Render(writer, true)
+			node.children[ii].Render(scope, writer, true)
 			if ii > 0 {
 				writer.Append(", ")
 			}
@@ -641,8 +695,8 @@ type Statement struct {
 	graph *OpGraph
 }
 
-func (s *Statement) Render(writer CodeWriter) {
-	s.graph.Render(writer, true)
+func (s *Statement) Render(scope *Scope, writer CodeWriter) {
+	s.graph.Render(scope, writer, true)
 }
 
 func (s *Statement) RenderAssemblyOffsets(writer CodeWriter) {
@@ -688,10 +742,10 @@ func shouldHaveNewlineBetween(element1 BlockElement, element2 BlockElement) bool
 	return false
 }
 
-func RenderBlockElements(elements []BlockElement, writer CodeWriter) {
+func RenderBlockElements(elements []BlockElement, scope *Scope, writer CodeWriter) {
 	for idx := 0; idx < len(elements); idx++ {
 		e := elements[idx]
-		e.Render(writer)
+		e.Render(scope, writer)
 		if !e.IsBlock() {
 			if OUTPUT_ASSEMBLY {
 				writer.Append("; // ")
@@ -713,11 +767,11 @@ type IfBlock struct {
 	body        []BlockElement
 }
 
-func (ib *IfBlock) Render(writer CodeWriter) {
+func (ib *IfBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Append("if ( ")
-	ib.conditional.Render(writer)
+	ib.conditional.Render(scope, writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
 		ib.conditional.RenderAssemblyOffsets(writer)
@@ -729,7 +783,7 @@ func (ib *IfBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(ib.body, writer)
+	RenderBlockElements(ib.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -762,7 +816,7 @@ type ElseBlock struct {
 	body []BlockElement
 }
 
-func (eb *ElseBlock) Render(writer CodeWriter) {
+func (eb *ElseBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Append("else")
@@ -785,7 +839,7 @@ func (eb *ElseBlock) Render(writer CodeWriter) {
 
 	if inline {
 		writer.Append(" ")
-		RenderBlockElements(eb.body, writer)
+		RenderBlockElements(eb.body, scope, writer)
 	} else {
 
 		writer.Append("\n")
@@ -793,7 +847,7 @@ func (eb *ElseBlock) Render(writer CodeWriter) {
 		writer.PushIndent()
 
 		// Write out the body
-		RenderBlockElements(eb.body, writer)
+		RenderBlockElements(eb.body, scope, writer)
 
 		writer.PopIndent()
 		writer.Append("}\n")
@@ -824,7 +878,7 @@ type DebugBlock struct {
 	body []BlockElement
 }
 
-func (db *DebugBlock) Render(writer CodeWriter) {
+func (db *DebugBlock) Render(scope *Scope, writer CodeWriter) {
 
 	inline := false
 
@@ -841,7 +895,7 @@ func (db *DebugBlock) Render(writer CodeWriter) {
 
 	if inline {
 		writer.Append("debug ")
-		RenderBlockElements(db.body, writer)
+		RenderBlockElements(db.body, scope, writer)
 	} else {
 		// Write out the top of the block
 		writer.Append("debug\n")
@@ -849,7 +903,7 @@ func (db *DebugBlock) Render(writer CodeWriter) {
 		writer.PushIndent()
 
 		// Write out the body
-		RenderBlockElements(db.body, writer)
+		RenderBlockElements(db.body, scope, writer)
 
 		// Write out the bottom of the block
 		writer.PopIndent()
@@ -887,7 +941,7 @@ type AtomicBlock struct {
 	body []BlockElement
 }
 
-func (db *AtomicBlock) Render(writer CodeWriter) {
+func (db *AtomicBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Append("atomic\n")
@@ -895,7 +949,7 @@ func (db *AtomicBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(db.body, writer)
+	RenderBlockElements(db.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -926,7 +980,7 @@ type ScheduleBlock struct {
 	body []BlockElement
 }
 
-func (db *ScheduleBlock) Render(writer CodeWriter) {
+func (db *ScheduleBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Append("schedule\n")
@@ -934,7 +988,7 @@ func (db *ScheduleBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(db.body, writer)
+	RenderBlockElements(db.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -966,7 +1020,7 @@ type ScheduleEveryBlock struct {
 	body     []BlockElement
 }
 
-func (eb *ScheduleEveryBlock) Render(writer CodeWriter) {
+func (eb *ScheduleEveryBlock) Render(scope *Scope, writer CodeWriter) {
 
 	// Write out the top of the block
 	writer.Appendf("every %s:\n", RenderFloat(eb.interval))
@@ -974,7 +1028,7 @@ func (eb *ScheduleEveryBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(eb.body, writer)
+	RenderBlockElements(eb.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -1006,10 +1060,10 @@ type WhileLoop struct {
 	body        []BlockElement
 }
 
-func (wl *WhileLoop) Render(writer CodeWriter) {
+func (wl *WhileLoop) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("while ( ")
-	wl.conditional.Render(writer)
+	wl.conditional.Render(scope, writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
 		wl.conditional.RenderAssemblyOffsets(writer)
@@ -1021,7 +1075,7 @@ func (wl *WhileLoop) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(wl.body, writer)
+	RenderBlockElements(wl.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -1055,7 +1109,7 @@ type DoWhileLoop struct {
 	body        []BlockElement
 }
 
-func (wl *DoWhileLoop) Render(writer CodeWriter) {
+func (wl *DoWhileLoop) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 
 	writer.Append("do\n")
@@ -1063,13 +1117,13 @@ func (wl *DoWhileLoop) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(wl.body, writer)
+	RenderBlockElements(wl.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
 	writer.Append("}\n")
 	writer.Append("while ( ")
-	wl.conditional.Render(writer)
+	wl.conditional.Render(scope, writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ); // ")
 		wl.conditional.RenderAssemblyOffsets(writer)
@@ -1108,11 +1162,10 @@ type ForLoop struct {
 	body        []BlockElement
 }
 
-func (fl *ForLoop) renderIncrement(writer CodeWriter) {
-	// Since they don't have an opcode for ++, try to detect it here at least
+func (fl *ForLoop) getIterationVariable(scope *Scope) (*Variable, int32) {
 	assignment := fl.increment.graph.children[0]
-	incrementVariable := ""
-	decrementVariable := ""
+	var iteratorVariable *Variable = nil
+	var incrementMagnitude int32 = 0
 
 	if assignment.operation.opcode == OP_VARIABLE_WRITE {
 		varWriteData := assignment.operation.data.(VariableWriteData)
@@ -1122,36 +1175,47 @@ func (fl *ForLoop) renderIncrement(writer CodeWriter) {
 				varReadData := add.children[0].operation.data.(VariableReadData)
 				if varReadData.index == varWriteData.index {
 					if IsLiteralInteger(add.children[1].operation) {
-						value := GetLiteralIntegerValue(add.children[1].operation)
-						switch value {
-						case 1:
-							incrementVariable = *add.children[0].code
-						case -1:
-							decrementVariable = *add.children[0].code
-						}
+						incrementMagnitude = GetLiteralIntegerValue(add.children[1].operation)
+						iteratorVariable = scope.variables[varReadData.index]
 					}
 				}
 			}
 		}
 	}
 
-	if len(incrementVariable) > 0 {
-		writer.Appendf("++%s", incrementVariable)
-	} else if len(decrementVariable) > 0 {
-		writer.Appendf("--%s", decrementVariable)
+	return iteratorVariable, incrementMagnitude
+}
+
+func (fl *ForLoop) renderIncrement(scope *Scope, writer CodeWriter) {
+	// Since they don't have an opcode for ++, try to detect it here at least
+	iterator, magnitude := fl.getIterationVariable(scope)
+
+	if iterator != nil && !IsEnumType(iterator.typeName) {
+		switch magnitude {
+		case -1:
+			writer.Appendf("--%s", iterator.variableName)
+		case 1:
+			writer.Appendf("++%s", iterator.variableName)
+		default:
+			if magnitude > 0 {
+				writer.Appendf("%s += %d", iterator.variableName, magnitude)
+			} else {
+				writer.Appendf("%s -= %d", iterator.variableName, -magnitude)
+			}
+		}
 	} else {
-		fl.increment.Render(writer)
+		fl.increment.Render(scope, writer)
 	}
 }
 
-func (fl *ForLoop) Render(writer CodeWriter) {
+func (fl *ForLoop) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("for ( ")
-	fl.init.Render(writer)
+	fl.init.Render(scope, writer)
 	writer.Append("; ")
-	fl.conditional.Render(writer)
+	fl.conditional.Render(scope, writer)
 	writer.Append("; ")
-	fl.renderIncrement(writer)
+	fl.renderIncrement(scope, writer)
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
 		fl.init.RenderAssemblyOffsets(writer)
@@ -1167,7 +1231,7 @@ func (fl *ForLoop) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(fl.body, writer)
+	RenderBlockElements(fl.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -1198,6 +1262,11 @@ func (fl *ForLoop) CheckCode(scope *Scope) {
 	fl.conditional.CheckCode(scope)
 	fl.increment.CheckCode(scope)
 	CheckCode(scope, fl.body)
+
+	iterator, _ := fl.getIterationVariable(scope)
+	if iterator != nil {
+		iterator.AddNameProvider(&IteratorNameProvider{})
+	}
 }
 
 type SwitchBlock struct {
@@ -1205,11 +1274,11 @@ type SwitchBlock struct {
 	body        []BlockElement
 }
 
-func (sb *SwitchBlock) Render(writer CodeWriter) {
+func (sb *SwitchBlock) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 	writer.Append("switch ( ")
 	if sb.conditional != nil {
-		sb.conditional.Render(writer)
+		sb.conditional.Render(scope, writer)
 	}
 	if OUTPUT_ASSEMBLY {
 		writer.Append(" ) // ")
@@ -1224,7 +1293,7 @@ func (sb *SwitchBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(sb.body, writer)
+	RenderBlockElements(sb.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -1281,7 +1350,7 @@ type CaseBlock struct {
 	body           []BlockElement
 }
 
-func (cb *CaseBlock) Render(writer CodeWriter) {
+func (cb *CaseBlock) Render(scope *Scope, writer CodeWriter) {
 	// Write out the top of the block
 	if cb.value != nil {
 		if cb.valueCode != nil {
@@ -1302,7 +1371,7 @@ func (cb *CaseBlock) Render(writer CodeWriter) {
 	writer.PushIndent()
 
 	// Write out the body
-	RenderBlockElements(cb.body, writer)
+	RenderBlockElements(cb.body, scope, writer)
 
 	// Write out the bottom of the block
 	writer.PopIndent()
@@ -1699,7 +1768,9 @@ func ParseOperations(scope *Scope, context *BlockContext, ops []Operation, minOp
 		node := new(OpGraph)
 		node.typeName = UNKNOWN_TYPE
 		node.operation = op
-		node.code = RenderOperationCode(op, scope)
+		if !op.IsVariable() {
+			node.code = RenderOperationCode(op, scope)
+		}
 
 		if op.data.PopCount() > 0 {
 			if op.data.PopCount() > len(stack) {

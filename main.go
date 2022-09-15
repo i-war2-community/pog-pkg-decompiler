@@ -298,7 +298,7 @@ func readSection(file *os.File, section *SectionHeader) error {
 		//fmt.Printf("%s", name)
 		lookup, ok := PACKAGES[name]
 		if !ok {
-			fmt.Printf("WARN: Exporting package '%s' not found in includes. Package name might be output with incorrect case!\n", name)
+			//fmt.Printf("WARN: Exporting package '%s' not found in includes. Package name might be output with incorrect case!\n", name)
 			//os.Exit(1)
 		} else {
 			name = lookup.name
@@ -465,6 +465,19 @@ func checkAllCode() {
 	}
 }
 
+func resolveAllNames() {
+	totalVariables := 0
+	totalResolvedNames := 0
+
+	// Resolve the names for all of our functions
+	for _, fnc := range DECOMPILED_FUNCS {
+		totalVariables += len(fnc.scope.variables)
+		totalResolvedNames += fnc.ResolveAllNames()
+	}
+
+	fmt.Printf("Resolved %d / %d variable names.\n", totalResolvedNames, totalVariables)
+}
+
 func createWriter() (CodeWriter, error) {
 	fmt.Printf("Writing pog: %s\n", OUTPUT_FILE)
 
@@ -573,12 +586,12 @@ func main() {
 					param.typeName = "int"
 					param.variable.AddReferencedType("int")
 					if param.variable.refCount > 0 {
-						fmt.Printf("WARN: Failed to resolve the type for parameter %s of function %s, defaulting to int.\n", param.parameterName, fnc.declaration.GetScopedName())
+						fmt.Printf("WARN: Failed to resolve the type for parameter %s id %d of function %s, defaulting to int.\n", param.parameterName, param.variable.id, fnc.declaration.GetScopedName())
 					}
 				}
 			}
 			// Lock in our header types
-			fnc.declaration.autoDetectTypes = false
+			//fnc.declaration.autoDetectTypes = false
 		}
 	}
 
@@ -591,6 +604,8 @@ func main() {
 	resolveAllTypes()
 
 	checkAllCode()
+
+	resolveAllNames()
 
 	// We need to detect the dependencies so we can reorder imports accordingly
 	DetectPackageDependencies()

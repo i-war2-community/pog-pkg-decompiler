@@ -86,12 +86,12 @@ const (
 
 	OP_VARIABLE_INIT byte = 0x3A
 
-	OP_UNKNOWN_3B            byte = 0x3B
-	OP_UNKNOWN_3C            byte = 0x3C
-	OP_HANDLE_VARIABLE_WRITE byte = 0x3D
+	OP_UNKNOWN_3B byte = 0x3B
+	OP_UNKNOWN_3C byte = 0x3C
 
-	OP_LITERAL_STRING byte = 0x3E
-	OP_STRING_EQUALS  byte = 0x3F
+	OP_STRING_VARIABLE_WRITE byte = 0x3D
+	OP_LITERAL_STRING        byte = 0x3E
+	OP_STRING_EQUALS         byte = 0x3F
 
 	OP_UNKNOWN_40 byte = 0x40 // Something to do with lists?
 
@@ -173,7 +173,7 @@ var OP_MAP = map[byte]OperationInfo{
 
 	OP_UNKNOWN_3B:            {name: "OP_UNKNOWN_3B", dataSize: 0, omit: false, parser: ParseUnaryOperator},
 	OP_UNKNOWN_3C:            {name: "OP_UNKNOWN_3C", dataSize: 0, omit: false, parser: ParseUnaryOperator},
-	OP_HANDLE_VARIABLE_WRITE: {name: "OP_HANDLE_VARIABLE_WRITE", dataSize: 4, parser: ParseVariableWrite},
+	OP_STRING_VARIABLE_WRITE: {name: "OP_STRING_VARIABLE_WRITE", dataSize: 4, parser: ParseVariableWrite},
 
 	OP_LITERAL_STRING: {name: "OP_LITERAL_STRING", dataSize: 4, parser: ParseLiteralString},
 	OP_STRING_EQUALS:  {name: "OP_STRING_EQUALS", dataSize: 0, parser: ParseOperator},
@@ -539,11 +539,7 @@ func (d FunctionCallData) String() string {
 	if ASSEMBLY_OFFSET_PREFIX {
 		prefix = d.declaration.GetScopedName()
 	} else {
-		if len(d.declaration.pkg) > 0 {
-			prefix = d.declaration.GetScopedName()
-		} else {
-			prefix = "local_function"
-		}
+		prefix = d.declaration.GetScopedName()
 	}
 	if d.declaration.parameters != nil {
 		return fmt.Sprintf("%s %d", prefix, len(*d.declaration.parameters))
