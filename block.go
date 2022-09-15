@@ -528,9 +528,6 @@ func (og *OpGraph) ResolveTypes(scope *Scope) {
 }
 
 func (og *OpGraph) CheckCode(scope *Scope) {
-	for idx := range og.children {
-		og.children[idx].CheckCode(scope)
-	}
 
 	switch og.operation.opcode {
 	case OP_EQUALS, OP_NOT_EQUALS:
@@ -570,6 +567,10 @@ func (og *OpGraph) CheckCode(scope *Scope) {
 		fallthrough
 	case OP_VARIABLE_READ:
 		og.code = nil
+	}
+
+	for idx := range og.children {
+		og.children[idx].CheckCode(scope)
 	}
 }
 

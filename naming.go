@@ -309,6 +309,7 @@ func (np *FunctionChainParameterProvider) GetName(v *Variable) string {
 }
 
 var EXCLUDED_HANDLE_TYPES = map[string]bool{
+	"task":   true,
 	"sim":    true,
 	"isim":   true,
 	"object": true,
