@@ -1,4 +1,4 @@
-package main
+package decompiler
 
 import (
 	"fmt"
