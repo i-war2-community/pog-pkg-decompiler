@@ -8,6 +8,8 @@ pog-pkg-decompiler.exe --includes _directory-of-h-files_ --output _pog-file-to-o
 
 ### Optional Flags
 
---assembly                      The "assmebly" of the original package should be output as comments above each function.
---assembly-only                 The "assembly" should be output with no code.
---assembly-offset-prefix        The "assembly" should be prefixed with the byte offset of it's location in the CODE section of the pkg.
+| Flag                      | Default | Description                                                                                              |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------- |
+| --assembly                | false   | The "assmebly" of the original package should be output as comments above each function.                 |
+| --assembly-only           | false   | The "assembly" should be output with no code.                                                            |
+| --assembly-offset-prefix  | true    | The "assembly" should be prefixed with the byte offset of it's location in the CODE section of the pkg.  |
