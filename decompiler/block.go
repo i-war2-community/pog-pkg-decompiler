@@ -66,6 +66,24 @@ func (og *OpGraph) GetAllReferencedVariableIndices() map[uint32]bool {
 	return result
 }
 
+func (og *OpGraph) GetAllReferencedFunctions() map[*FunctionDeclaration]bool {
+	result := map[*FunctionDeclaration]bool{}
+	switch og.operation.opcode {
+	case OP_FUNCTION_CALL_IMPORTED, OP_FUNCTION_CALL_LOCAL, OP_TASK_CALL_IMPORTED, OP_TASK_CALL_LOCAL:
+		fncData := og.operation.data.(FunctionCallData)
+		result[fncData.declaration] = true
+	}
+
+	for _, child := range og.children {
+		childResult := child.GetAllReferencedFunctions()
+		for k, v := range childResult {
+			result[k] = v
+		}
+	}
+
+	return result
+}
+
 func (og *OpGraph) GetFunctionParameterChild(parameterIndex int) *OpGraph {
 	if !og.operation.IsFunctionCall() {
 		return nil

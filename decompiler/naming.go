@@ -3,6 +3,7 @@ package decompiler
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/iancoleman/strcase"
@@ -16,30 +17,61 @@ type NameProvider interface {
 
 type VariableFilterFunc func(v *Variable) bool
 
+type ProviderResult struct {
+	provider NameProvider
+	name     string
+}
+
 func GetHighestPriorityProvider(v *Variable, providers []NameProvider) NameProvider {
-	var highestProvider NameProvider = nil
-	highestPriority := 0
+	providerResults := map[int][]ProviderResult{}
 
 	// Find the name with the highest priority
 	for _, provider := range providers {
-		name := provider.GetName(v)
-		if len(name) > 0 {
+		result := ProviderResult{
+			provider: provider,
+			name:     provider.GetName(v),
+		}
+		if len(result.name) > 0 {
 			priority := provider.GetPriority()
-			if priority > highestPriority {
-				highestPriority = priority
-				highestProvider = provider
-			}
+			providerResults[priority] = append(providerResults[priority], result)
 		}
 	}
 
-	return highestProvider
+	// Get the list of priorities
+	priorities := []int{}
+	for k := range providerResults {
+		priorities = append(priorities, k)
+	}
+
+	sort.Ints(priorities)
+
+	// Find the highest priority provider where all ties match
+	for ii := len(priorities) - 1; ii >= 0; ii-- {
+		priority := priorities[ii]
+		results := providerResults[priority]
+		name := results[0].name
+		remain := results[1:]
+		for jj := range remain {
+			if name != results[jj].name {
+				name = ""
+				break
+			}
+		}
+		if len(name) > 0 {
+			return results[0].provider
+		}
+	}
+
+	return nil
 }
 
 func simpleNameConflictResolution(name string, index int) string {
 	return fmt.Sprintf("%s_%d", name, index)
 }
 
-type ConstantNameProvider struct{}
+type ConstantNameProvider struct {
+	assignment *OpGraph
+}
 
 func (np *ConstantNameProvider) GetPriority() int {
 	return 10
@@ -52,7 +84,7 @@ func (np *ConstantNameProvider) ResolveConflict(v *Variable, index int) string {
 func (np *ConstantNameProvider) GetName(v *Variable) string {
 	switch v.typeName {
 	case "int", "float":
-		if v.assignmentCount == 1 {
+		if v.assignmentCount == 1 && len(np.assignment.GetAllReferencedVariableIndices()) == 0 && len(np.assignment.GetAllReferencedFunctions()) == 0 {
 			return "constant"
 		}
 	}
@@ -120,7 +152,7 @@ func (np *GlobalNameProvider) GetName(v *Variable) string {
 					// Strip the quotes
 					value = value[1 : len(value)-1]
 
-					return ConvertToIdentifier(value)
+					return strcase.ToLowerCamel(ConvertToIdentifier(value))
 				}
 			}
 		}
@@ -146,6 +178,32 @@ func (fr funcRegexp) IsMatch(fd *FunctionDeclaration) bool {
 
 func allowedAssignmentOperation(op *OpGraph) bool {
 	return op.operation.IsFunctionCall() || op.operation.opcode == OP_UNKNOWN_3B || op.operation.IsCast()
+}
+
+func opCallsFunctionChain(op *OpGraph, targetFuncChain []*funcRegexp, optional *funcRegexp) *FunctionDeclaration {
+	chainIdx := 0
+	for node := op; allowedAssignmentOperation(node) && len(node.children) > 0; node = node.children[len(node.children)-1] {
+		if node.operation.opcode == OP_UNKNOWN_3B || node.operation.IsCast() {
+			continue
+		}
+		fd := node.operation.GetFunctionDeclaration()
+
+		// Check if the function matches
+		if targetFuncChain[chainIdx].IsMatch(fd) {
+
+			if chainIdx == len(targetFuncChain)-1 {
+
+				return fd
+			}
+			chainIdx++
+		} else if chainIdx != 0 {
+			return nil
+		} else if !optional.IsMatch(fd) {
+			// If this doesn't match our allowed nested functions we are done
+			break
+		}
+	}
+	return nil
 }
 
 func opCallsFunction(op *OpGraph, targetFunc, nestedFuncs *funcRegexp) *FunctionDeclaration {
@@ -226,6 +284,47 @@ func getNameFromFunctionParameter(op *OpGraph, targetFunc, nestedFuncs *funcRege
 		}
 	}
 	return "", nil
+}
+
+type FunctionChainVariableNameFunc func(v *Variable, fd *FunctionDeclaration) string
+
+type FunctionChainProvider struct {
+	funcCall      *OpGraph
+	variableName  FunctionChainVariableNameFunc
+	functionChain []*funcRegexp
+	optional      *funcRegexp
+	filter        VariableFilterFunc
+	priority      int
+}
+
+func (np *FunctionChainProvider) GetPriority() int {
+	if np.priority == 0 {
+		return 100
+	}
+	return np.priority
+}
+
+func (np *FunctionChainProvider) ResolveConflict(v *Variable, index int) string {
+	return simpleNameConflictResolution(v.variableName, index)
+}
+
+func (np *FunctionChainProvider) GetName(v *Variable) string {
+	if np.filter != nil && !np.filter(v) {
+		return ""
+	}
+
+	optional := np.optional
+	if optional == nil {
+		optional = newFuncRegexp(`.*`, `Cast`)
+	}
+
+	fd := opCallsFunctionChain(np.funcCall, np.functionChain, optional)
+
+	if fd != nil {
+		return np.variableName(v, fd)
+	}
+
+	return ""
 }
 
 type SingleFunctionVariableNameFunc func(v *Variable, fd *FunctionDeclaration) string
@@ -436,7 +535,9 @@ func (np *IteratorNameProvider) GetName(v *Variable) string {
 
 func AddAssignmentBasedNamingProviders(v *Variable, assignment *OpGraph) {
 	// Constant provider
-	v.AddNameProvider(&ConstantNameProvider{})
+	v.AddNameProvider(&ConstantNameProvider{
+		assignment: assignment,
+	})
 	// Global provider
 	v.AddNameProvider(&GlobalNameProvider{
 		funcCall: assignment,
@@ -497,7 +598,10 @@ func AddAssignmentBasedNamingProviders(v *Variable, assignment *OpGraph) {
 		funcCall:  assignment,
 		function:  newFuncRegexp(`Object`, `.*Property`),
 		parameter: regexp.MustCompile(`property`),
-		priority:  200,
+		variableName: func(v *Variable, parameterValue string, fd *FunctionDeclaration) string {
+			return strcase.ToLowerCamel(parameterValue)
+		},
+		priority: 200,
 	})
 	// Task State provider
 	v.AddNameProvider(&SingleFunctionProvider{
@@ -505,6 +609,17 @@ func AddAssignmentBasedNamingProviders(v *Variable, assignment *OpGraph) {
 		function:     newFuncRegexp(`State`, `Find`),
 		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "taskState" },
 		priority:     300,
+	})
+	// Current Task State provider
+	v.AddNameProvider(&FunctionChainProvider{
+		funcCall: assignment,
+		functionChain: []*funcRegexp{
+			newFuncRegexp(`State`, `Find`),
+			newFuncRegexp(`Task`, `Current`),
+		},
+		optional:     newFuncRegexp(`none`, `none`),
+		variableName: func(v *Variable, fd *FunctionDeclaration) string { return "currentTaskState" },
+		priority:     400,
 	})
 	// Screen Class provider
 	v.AddNameProvider(&SingleFunctionProvider{

@@ -296,19 +296,21 @@ func (v *Variable) ResolveType() bool {
 		detectedType = handleEquals[0]
 	} else {
 		if IsHandleType(assignedType) && IsHandleType(referencedType) {
-			if assignedType != referencedType && HandleIsDerivedFrom(assignedType, referencedType) {
+			if referencedType == assignedType {
+				detectedType = referencedType
+			} else if HandleIsDerivedFrom(assignedType, referencedType) {
 				detectedType = assignedType
 			} else {
+				detectedType = referencedType
+				// In order to use the referenced type, ALL our assigned types must derive from it
 				for _, atype := range assigned {
-					if !HandleIsDerivedFrom(atype, referencedType) {
-						// fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!>>> %d Variable using referenced type %s, from which assigned type %s is not derived\n", v.id, referencedType, atype)
+					if !HandleIsDerivedFrom(referencedType, atype) {
+						detectedType = assignedType
+						break
 					}
 				}
-				if assignedType != referencedType {
-					// fmt.Printf("===============================>>> %d Variable using referenced type %s instead of assigned type %s\n", v.id, referencedType, assignedType)
-				}
-				detectedType = referencedType
 			}
+
 			if parameterAssignedType != UNKNOWN_TYPE {
 				detectedType = HighestCommonAncestorType(detectedType, parameterAssignedType)
 			}
