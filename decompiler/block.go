@@ -2048,7 +2048,7 @@ func ParseOperations(scope *Scope, context *BlockContext, ops []Operation, minOp
 				statement.graph.FlagAsElseJump()
 			} else {
 				fmt.Printf("ERROR: Unhandled jump at offset 0x%08X\n", op.offset)
-				//os.Exit(1)
+				os.Exit(1)
 			}
 		}
 

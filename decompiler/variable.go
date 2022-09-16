@@ -52,6 +52,23 @@ type Variable struct {
 	id                     int
 }
 
+func NewVariable(variableName string, typeName string, uniqueId bool) *Variable {
+	v := &Variable{
+		typeName:               typeName,
+		variableName:           variableName,
+		stackIndex:             0xFFFFFFFF,
+		assignedTypes:          map[string]bool{},
+		referencedTypes:        map[string]bool{},
+		parameterAssignedTypes: map[string]bool{},
+		handleEqualsTypes:      map[string]bool{},
+	}
+	if uniqueId {
+		v.id = VARIABLE_ID_COUNTER
+		VARIABLE_ID_COUNTER++
+	}
+	return v
+}
+
 var VARIABLE_ID_COUNTER int = 0
 
 func (v *Variable) AddAssignedType(typeName string) {
@@ -282,6 +299,14 @@ func (v *Variable) ResolveType() bool {
 			if assignedType != referencedType && HandleIsDerivedFrom(assignedType, referencedType) {
 				detectedType = assignedType
 			} else {
+				for _, atype := range assigned {
+					if !HandleIsDerivedFrom(atype, referencedType) {
+						// fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!>>> %d Variable using referenced type %s, from which assigned type %s is not derived\n", v.id, referencedType, atype)
+					}
+				}
+				if assignedType != referencedType {
+					// fmt.Printf("===============================>>> %d Variable using referenced type %s instead of assigned type %s\n", v.id, referencedType, assignedType)
+				}
 				detectedType = referencedType
 			}
 			if parameterAssignedType != UNKNOWN_TYPE {

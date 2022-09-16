@@ -87,6 +87,20 @@ func (fd *FunctionDefinition) ResetPossibleTypes() {
 }
 
 func (fd *FunctionDefinition) CheckCode() {
+	for _, v := range fd.scope.variables {
+		if !IsHandleType(v.typeName) {
+			continue
+		}
+		assignedTypes := v.GetAssignedTypes()
+		for _, atype := range assignedTypes {
+			if !IsHandleType(atype) {
+				continue
+			}
+			if !HandleIsDerivedFrom(atype, v.typeName) {
+				fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!>>> Variable %d using type %s, from which assigned type %s is not derived!\n", v.id, v.typeName, atype)
+			}
+		}
+	}
 	CheckCode(fd.scope, fd.body)
 }
 
@@ -309,14 +323,6 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 	result := new(FunctionDeclaration)
 	result.pkg = pkg
 	result.name = name
-	result.returnInfo = &Variable{
-		stackIndex:             0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
-		assignedTypes:          map[string]bool{},
-		referencedTypes:        map[string]bool{},
-		parameterAssignedTypes: map[string]bool{},
-		handleEqualsTypes:      map[string]bool{},
-		typeName:               UNKNOWN_TYPE,
-	}
 
 	result.autoDetectTypes = true
 
@@ -325,8 +331,7 @@ func AddFunctionDeclaration(pkg string, name string) *FunctionDeclaration {
 		return existing
 	}
 
-	result.returnInfo.id = VARIABLE_ID_COUNTER
-	VARIABLE_ID_COUNTER++
+	result.returnInfo = NewVariable("", UNKNOWN_TYPE, true)
 
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
@@ -343,14 +348,6 @@ func NewLocalFunctionAtOffset(offset uint32) *FunctionDeclaration {
 
 func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration {
 	result := new(FunctionDeclaration)
-	result.returnInfo = &Variable{
-		stackIndex:             0xFFFFFFFF, // Make sure this isn't used somewhere on accident as a regular variable
-		assignedTypes:          map[string]bool{},
-		referencedTypes:        map[string]bool{},
-		parameterAssignedTypes: map[string]bool{},
-		handleEqualsTypes:      map[string]bool{},
-		typeName:               UNKNOWN_TYPE,
-	}
 	result.autoDetectTypes = false
 
 	if !strings.HasPrefix(prototype, PROTOTYPE_PREFIX) {
@@ -379,12 +376,13 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 	parameterList = strings.TrimSpace(parameterList[:len(parameterList)-1])
 
 	parts = strings.Fields(function)
+	returnType := UNKNOWN_TYPE
 
 	switch len(parts) {
 	case 1:
-		result.returnInfo.typeName = ""
+		returnType = ""
 	case 2:
-		result.returnInfo.typeName = parts[0]
+		returnType = parts[0]
 		function = parts[1]
 	default:
 		fmt.Printf("ERROR: Invalid function prototype: %s\n", prototype)
@@ -429,10 +427,7 @@ func AddFunctionDeclarationFromPrototype(prototype string) *FunctionDeclaration 
 		result.parameters = &[]FunctionParameter{}
 	}
 
-	if result.pkg == EXPORTING_PACKAGE {
-		result.returnInfo.id = VARIABLE_ID_COUNTER
-		VARIABLE_ID_COUNTER++
-	}
+	result.returnInfo = NewVariable("", returnType, result.pkg == EXPORTING_PACKAGE)
 
 	FUNC_DECLARATIONS[result.GetScopedName()] = result
 	return result
@@ -611,17 +606,8 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	if declaration.parameters != nil {
 		for ii := 0; ii < len(*declaration.parameters); ii++ {
 			param := &(*declaration.parameters)[ii]
-			v := &Variable{
-				typeName:               param.typeName,
-				variableName:           param.parameterName,
-				stackIndex:             uint32(ii),
-				assignedTypes:          map[string]bool{},
-				referencedTypes:        map[string]bool{},
-				parameterAssignedTypes: map[string]bool{},
-				handleEqualsTypes:      map[string]bool{},
-				id:                     VARIABLE_ID_COUNTER,
-			}
-			VARIABLE_ID_COUNTER++
+			v := NewVariable(param.parameterName, param.typeName, true)
+			v.stackIndex = uint32(ii)
 			definition.scope.variables = append(definition.scope.variables, v)
 			// Save off a reference to this variable for use elsewhere
 			param.variable = v
@@ -634,17 +620,8 @@ func DecompileFunction(declaration *FunctionDeclaration, startingIndex int, init
 	if localVariableCount > 0 {
 		var ii uint32
 		for ii = 0; ii < localVariableCount; ii++ {
-			lv := &Variable{
-				typeName:               UNKNOWN_TYPE,
-				variableName:           fmt.Sprintf("local_%d", ii),
-				stackIndex:             uint32(ii + definition.scope.localVariableIndexOffset),
-				assignedTypes:          map[string]bool{},
-				referencedTypes:        map[string]bool{},
-				parameterAssignedTypes: map[string]bool{},
-				handleEqualsTypes:      map[string]bool{},
-				id:                     VARIABLE_ID_COUNTER,
-			}
-			VARIABLE_ID_COUNTER++
+			lv := NewVariable(fmt.Sprintf("local_%d", ii), UNKNOWN_TYPE, true)
+			lv.stackIndex = uint32(ii + definition.scope.localVariableIndexOffset)
 			definition.scope.variables = append(definition.scope.variables, lv)
 		}
 		// Skip over the local variable opcode

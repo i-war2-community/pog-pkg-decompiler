@@ -569,12 +569,20 @@ func ParseFunctionCallLocal(data []byte, codeOffset uint32) OperationData {
 		declaration = NewLocalFunctionAtOffset(offset)
 	}
 
+	if declaration.parameters != nil && len(*declaration.parameters) != int(parameterCount) {
+		fmt.Printf("WARN: Function prototype in header does not parameter count for function call: %s\n", declaration.GetScopedName())
+		fmt.Printf("    Header parameter count: %d\n", len(*declaration.parameters))
+		fmt.Printf("      Call parameter count: %d\n", parameterCount)
+		declaration.parameters = nil
+	}
+
 	if declaration.parameters == nil {
 		params := make([]FunctionParameter, parameterCount)
 		for ii := 0; ii < len(params); ii++ {
 			p := &params[ii]
 			p.typeName = UNKNOWN_TYPE
 			p.parameterName = fmt.Sprintf("param_%d", ii)
+			p.variable = NewVariable(p.parameterName, p.typeName, true)
 		}
 		declaration.parameters = &params
 	}
@@ -594,6 +602,13 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 		declaration = NewLocalFunctionAtOffset(offset)
 	}
 
+	if declaration.parameters != nil && len(*declaration.parameters) != int(parameterCount) {
+		fmt.Printf("WARN: Function prototype in header does not parameter count for function call: %s\n", declaration.GetScopedName())
+		fmt.Printf("    Header parameter count: %d\n", len(*declaration.parameters))
+		fmt.Printf("      Call parameter count: %d\n", parameterCount)
+		declaration.parameters = nil
+	}
+
 	declaration.returnInfo.typeName = "task"
 
 	if declaration.parameters == nil {
@@ -602,6 +617,7 @@ func ParseTaskCallLocal(data []byte, codeOffset uint32) OperationData {
 			p := &params[ii]
 			p.typeName = UNKNOWN_TYPE
 			p.parameterName = fmt.Sprintf("param_%d", ii)
+			p.variable = NewVariable(p.parameterName, p.typeName, true)
 		}
 		declaration.parameters = &params
 	}
@@ -615,6 +631,13 @@ func ParseFunctionCallImported(data []byte, codeOffset uint32) OperationData {
 	declaration := FUNC_IMPORT_MAP[codeOffset]
 	parameterCount := binary.LittleEndian.Uint32(data[8:12])
 
+	if declaration.parameters != nil && len(*declaration.parameters) != int(parameterCount) {
+		fmt.Printf("WARN: Function prototype in header does not parameter count for function call: %s\n", declaration.GetScopedName())
+		fmt.Printf("    Header parameter count: %d\n", len(*declaration.parameters))
+		fmt.Printf("      Call parameter count: %d\n", parameterCount)
+		declaration.parameters = nil
+	}
+
 	if declaration.parameters == nil {
 		fmt.Printf("WARN: Failed to load function prototype for imported function %s\n", declaration.GetScopedName())
 		params := make([]FunctionParameter, parameterCount)
@@ -622,6 +645,7 @@ func ParseFunctionCallImported(data []byte, codeOffset uint32) OperationData {
 			p := &params[ii]
 			p.typeName = UNKNOWN_TYPE
 			p.parameterName = fmt.Sprintf("param_%d", ii)
+			p.variable = NewVariable(p.parameterName, p.typeName, true)
 		}
 		declaration.parameters = &params
 	}
